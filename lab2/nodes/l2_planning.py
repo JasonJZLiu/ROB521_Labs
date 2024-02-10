@@ -115,16 +115,15 @@ class PathPlanner:
         collision_mask = np.any(collision_mask_per_point, axis=1)
         return collision_mask
 
-    def simulate_trajectory(self, node_i, point_s):
+    def simulate_trajectory(self, node_i, point_s, visualize=0):
         #Simulates the non-holonomic motion of the robot.
         #This function drives the robot from node_i towards point_s. This function does has many solutions!
         #node_i is a 3 by 1 vector [x;y;theta] this can be used to construct the SE(2) matrix T_{OI} in course notation
         #point_s is the sampled point vector [x; y]
-        print("TO DO: Implment a method to simulate a trajectory given a sampled point")
-        # vel, rot_vel = self.robot_controller(node_i, point_s)
-
-        # robot_traj = self.trajectory_rollout(vel, rot_vel)
-        # return robot_traj
+        
+        # Return: (N, 3), where N can change depending on the length of the trajectory
+        vel, rot_vel, robot_traj = self.robot_controller(node_i, point_s, visualize)
+        return robot_traj
     
     def robot_controller(self, node_i, point_s, visualize=0):
         #This controller determines the velocities that will nominally move the robot from node i to node s
@@ -145,33 +144,34 @@ class PathPlanner:
         rot_vel_candidates = rot_vel_grid.flatten().reshape(-1, 1)
         # print(np.hstack([vel_candidates, rot_vel_candidates]))
 
-
-        pose_traj, last_valid_substep, last_valid_position = self.trajectory_rollout(
+        # rollout the trajectories given the velocities
+        pose_traj, last_valid_substep, last_valid_poses = self.trajectory_rollout(
             vel_candidates, rot_vel_candidates, node_i.pose, self.timestep, self.num_substeps
         )
 
-        last_position_error = np.linalg.norm(last_valid_position - point_s, axis=1)
+        # measure each trajectory's final position error
+        last_position_error = np.linalg.norm(last_valid_poses[:, 0:2] - point_s, axis=1)
         best_vel_idx = np.argmin(last_position_error)
-        best_traj = pose_traj[best_vel_idx, 0:last_valid_substep[best_vel_idx]+1, :]
         best_vel = vel_candidates[best_vel_idx]
         best_rot_vel = rot_vel_candidates[best_vel_idx]
+        best_traj = pose_traj[best_vel_idx, 0:last_valid_substep[best_vel_idx]+1, :]
 
         if visualize != 0:
             if visualize == 2:
                 # draw all paths
                 for i in range(pose_traj.shape[0]):
                     for j in range(pose_traj.shape[1]):
-                        if not np.all(np.isnan(pose_traj[i, j]) == np.isnan(np.array([np.nan, np.nan]))):
-                            self.window.add_point(pose_traj[i, j], radius=2, color=(255, 0, 0), update=False)
+                        if not np.all(np.isnan(pose_traj[i, j]) == np.isnan(np.array([np.nan, np.nan, np.nan]))):
+                            self.window.add_point(pose_traj[i, j, 0:2], radius=2, color=(255, 0, 0), update=False)
                 # draw all end points
-                for i in range(last_valid_position.shape[0]):
-                    self.window.add_point(last_valid_position[i], radius=2, color=(0, 255, 0), update=False)
+                for i in range(last_valid_poses.shape[0]):
+                    self.window.add_point(last_valid_poses[i, 0:2], radius=2, color=(0, 255, 0), update=False)
             # draw best path
             for i in range(best_traj.shape[0]):
-                self.window.add_point(best_traj[i], radius=2, color=(0, 0, 255), update=False)
+                self.window.add_point(best_traj[i, 0:2], radius=2, color=(0, 0, 255), update=False)
             self.window.update()
 
-        return best_vel, best_rot_vel
+        return best_vel, best_rot_vel, best_traj
 
 
     def trajectory_rollout(self, vel, rot_vel, pose, timestep, num_substeps):
@@ -184,9 +184,9 @@ class PathPlanner:
         # pose: (3, )
 
         # Returns:
-        # an array of shape (num_vel, num_substeps, 2), where points post collision are filled with np.nan
+        # an array of shape (num_vel, num_substeps, 3), where points post collision are filled with np.nan
         # an array of shape (num_vel,) that indicates the last collision-free substep idx 
-        # an array of shape (num_vel, 2) that represents the last collision-free position
+        # an array of shape (num_vel, 3) that represents the last collision-free pose
 
         # kinematics closed-form solution:
         # x(t) = x_0 + (v/w)*[sin(wt+theta_0) - sin(theta_0)]
@@ -214,16 +214,17 @@ class PathPlanner:
             y_0 + vel*t*np.sin(theta_0), 
             y_0 - (vel/rot_vel)*(np.cos(rot_vel*t + theta_0) - np.cos(theta_0)),
         )
-        # theta_traj = theta_0 + rot_vel*t
+        theta_traj = theta_0 + rot_vel*t
 
-        # (num_vel, num_substeps, 2)
-        pose_traj = np.dstack((x_traj, y_traj))
+        # (num_vel, num_substeps, 3)
+        pose_traj = np.dstack((x_traj, y_traj, theta_traj))
+
         # (num_vel, num_substeps)
-        collision_mask = self.collision_check(pose_traj.reshape(-1, 2)).reshape(-1, num_substeps)
+        collision_mask = self.collision_check(pose_traj.reshape(-1, 3)[:, 0:2]).reshape(-1, num_substeps)
         # set to True for all substeps after the first True (num_vel, num_substeps)
         collision_mask_corrected = np.cumsum(collision_mask, axis=1).astype(bool)
-        # (num_vel, num_substeps, 2)
-        pose_traj[collision_mask_corrected] = np.array([np.nan, np.nan])
+        # (num_vel, num_substeps, 3)
+        pose_traj[collision_mask_corrected] = np.array([np.nan, np.nan, np.nan])
 
         # first substep that encounters a collision
         first_collision_indices = np.argmax(collision_mask_corrected, axis=1)
@@ -237,8 +238,8 @@ class PathPlanner:
             first_collision_indices - 1
         )
         
-        last_valid_position = pose_traj[np.arange(num_vel), last_valid_substep, :]
-        return pose_traj, last_valid_substep, last_valid_position
+        last_valid_poses = pose_traj[np.arange(num_vel), last_valid_substep, :]
+        return pose_traj, last_valid_substep, last_valid_poses
 
     
     def point_to_cell(self, point):
