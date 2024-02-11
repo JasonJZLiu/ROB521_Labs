@@ -16,6 +16,9 @@ from visualization_msgs.msg import Marker
 # ros and se2 conversion utils
 import utils
 
+# path planner
+from l2_planning import PathPlanner
+
 
 TRANS_GOAL_TOL = .1  # m, tolerance to consider a goal complete
 ROT_GOAL_TOL = .3  # rad, tolerance to consider a goal complete
@@ -57,13 +60,12 @@ class PathFollower():
 
         # map
         map = rospy.wait_for_message('/map', OccupancyGrid)
+        # (1600, 1600)
         self.map_np = np.array(map.data).reshape(map.info.height, map.info.width)
         self.map_resolution = round(map.info.resolution, 5)
+        # [-21.0, -49.25, 0.000000]
         self.map_origin = -utils.se2_pose_from_pose(map.info.origin)  # negative because of weird way origin is stored
-        print(self.map_origin)
         self.map_nonzero_idxes = np.argwhere(self.map_np)
-        print(map)
-
 
         # collisions
         self.collision_radius_pix = COLLISION_RADIUS / self.map_resolution
@@ -89,8 +91,8 @@ class PathFollower():
         cur_dir = os.path.dirname(os.path.realpath(__file__))
 
         # to use the temp hardcoded paths above, switch the comment on the following two lines
-        self.path_tuples = np.load(os.path.join(cur_dir, 'path.npy')).T
-        # self.path_tuples = np.array(TEMP_HARDCODE_PATH)
+        # self.path_tuples = np.load(os.path.join(cur_dir, 'path.npy')).T
+        self.path_tuples = np.array(TEMP_HARDCODE_PATH)
 
         self.path = utils.se2_pose_list_to_path(self.path_tuples, 'map')
         self.global_path_pub.publish(self.path)
@@ -114,6 +116,17 @@ class PathFollower():
 
         self.rate = rospy.Rate(CONTROL_RATE)
 
+        map_filename = "willowgarageworld_05res.png"
+        map_settings_filename = "willowgarageworld_05res.yaml"
+        self.path_planner = PathPlanner(
+            map_filename=map_filename, 
+            map_setings_filename=map_settings_filename, 
+            goal_point=self.path_tuples[0, 0:2], 
+            stopping_dist=0.5,
+        )
+        self.path_planner.vel_max = 0.26
+        self.path_planner.rot_vel_max = 1.82 
+
         rospy.on_shutdown(self.stop_robot_on_shutdown)
         self.follow_path()
 
@@ -125,45 +138,70 @@ class PathFollower():
             self.update_pose()
             self.check_and_update_goal()
 
-            # start trajectory rollout algorithm
-            local_paths = np.zeros([self.horizon_timesteps + 1, self.num_opts, 3])
-            local_paths[0] = np.atleast_2d(self.pose_in_map_np).repeat(self.num_opts, axis=0)
+            pose_traj, last_valid_substep, last_valid_poses = self.path_planner.trajectory_rollout(
+                vel=self.all_opts[:, 0:1], 
+                rot_vel=self.all_opts[:, 1:2], 
+                pose=self.pose_in_map_np, 
+                timestep=CONTROL_HORIZON,
+                num_substeps=self.horizon_timesteps,
+            )  
 
-            print("TO DO: Propogate the trajectory forward, storing the resulting points in local_paths!")
-            for t in range(1, self.horizon_timesteps + 1):
-                # propogate trajectory forward, assuming perfect control of velocity and no dynamic effects
-                pass
+            valid_pose_traj_mask = ~np.isnan(pose_traj[:, -1, :]).any(axis=1)
+            valid_pose_traj = pose_traj[valid_pose_traj_mask]
 
-            # check all trajectory points for collisions
-            # first find the closest collision point in the map to each local path point
-            local_paths_pixels = (self.map_origin[:2] + local_paths[:, :, :2]) / self.map_resolution
-            valid_opts = range(self.num_opts)
-            local_paths_lowest_collision_dist = np.ones(self.num_opts) * 50
-
-            print("TO DO: Check the points in local_path_pixels for collisions")
-            for opt in range(local_paths_pixels.shape[1]):
-                for timestep in range(local_paths_pixels.shape[0]):
-                    pass
-
-            # remove trajectories that were deemed to have collisions
-            print("TO DO: Remove trajectories with collisions!")
-
-            # calculate final cost and choose best option
-            print("TO DO: Calculate the final cost and choose the best control option!")
-            final_cost = np.zeros(self.num_opts)
-            if final_cost.size == 0:  # hardcoded recovery if all options have collision
-                control = [-.1, 0]
+            if valid_pose_traj.shape[0] == 0:
+                control = [-0.1, 0]
             else:
-                best_opt = valid_opts[final_cost.argmin()]
-                control = self.all_opts[best_opt]
-                self.local_path_pub.publish(utils.se2_pose_list_to_path(local_paths[:, best_opt], 'map'))
+                trans_dist_error = valid_pose_traj[:, -1, 0:2] - self.cur_goal[0:2].reshape(1, 2)
+                trans_cost = np.linalg.norm(trans_dist_error, axis=1)
 
-            # send command to robot
+                if np.linalg.norm(self.pose_in_map_np[0:2] - self.cur_goal[0:2]) < MIN_TRANS_DIST_TO_USE_ROT:
+                    abs_angle_diff = np.abs(valid_pose_traj[:, -1, 2] - self.cur_goal[2])
+                    
+                    rot_dist_error = np.minimum(np.pi * 2 - abs_angle_diff, abs_angle_diff)
+                    rot_cost = np.abs(rot_dist_error)
+                else:
+                    rot_cost = 0
+                
+
+                final_cost = trans_cost + rot_cost
+
+                best_valid_vel_idx = np.argmin(final_cost)
+
+                control = self.all_opts[valid_pose_traj_mask][best_valid_vel_idx]
+                best_valid_pose_traj = valid_pose_traj[best_valid_vel_idx]
+                self.local_path_pub.publish(utils.se2_pose_list_to_path(best_valid_pose_traj, 'map'))
+
+
+
+            # if pose_traj.shape[0] == 0:
+            #     control = [-.1, 0]
+            # else:
+            #     trans_dist_error = last_valid_poses[:, 0:2] - self.cur_goal[0:2].reshape(1, 2)
+            #     trans_cost = np.linalg.norm(trans_dist_error, axis=1)
+
+            #     if np.linalg.norm(self.pose_in_map_np[0:2] - self.cur_goal[0:2]) < MIN_TRANS_DIST_TO_USE_ROT:
+            #         abs_angle_diff = np.abs(last_valid_poses[:, 2] - self.cur_goal[2])
+            #         rot_dist_error = np.minimum(np.pi * 2 - abs_angle_diff, abs_angle_diff)
+            #         rot_cost = 10 * np.abs(rot_dist_error)
+            #     else:
+            #         rot_cost = 0
+
+            #     final_cost = trans_cost + rot_cost
+
+            #     best_valid_vel_idx = np.argmin(final_cost)
+
+            #     control = self.all_opts[best_valid_vel_idx]
+            #     best_valid_pose_traj = pose_traj[best_valid_vel_idx, 0:last_valid_substep[best_valid_vel_idx]+1, :]
+            #     self.local_path_pub.publish(utils.se2_pose_list_to_path(best_valid_pose_traj, 'map'))
+
+
+
+
             self.cmd_pub.publish(utils.unicyle_vel_to_twist(control))
 
-            # uncomment out for debugging if necessary
-            # print("Selected control: {control}, Loop time: {time}, Max time: {max_time}".format(
-            #     control=control, time=(rospy.Time.now() - tic).to_sec(), max_time=1/CONTROL_RATE))
+            print("Selected control: {control}, Loop time: {time}, Max time: {max_time}".format(
+                control=control, time=(rospy.Time.now() - tic).to_sec(), max_time=1/CONTROL_RATE))
 
             self.rate.sleep()
 

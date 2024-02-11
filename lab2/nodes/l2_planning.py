@@ -61,8 +61,11 @@ class PathPlanner:
         # self.vel_max = 0.5 #m/s (Feel free to change!)
         # self.rot_vel_max = 1.5 #0.2 #rad/s (Feel free to change!)
 
+        # self.vel_max = 0.26 #m/s (Feel free to change!)
+        # self.rot_vel_max = 1.82 #0.2 #rad/s (Feel free to change!)
+
         self.vel_max = 1 #m/s (Feel free to change!)
-        self.rot_vel_max = 1.5 #0.2 #rad/s (Feel free to change!)
+        self.rot_vel_max = 1.82 #0.2 #rad/s (Feel free to change!)
 
         #Goal Parameters
         self.goal_point = goal_point #m
@@ -88,6 +91,7 @@ class PathPlanner:
         self.window = pygame_utils.PygameWindow(
             "Path Planner", (2500, 2500), self.occupancy_map.shape, self.map_settings_dict, self.goal_point, self.stopping_dist)
         return
+
 
 
     #Functions required for RRT
