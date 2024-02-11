@@ -67,6 +67,7 @@ class PathPlanner:
         #Goal Parameters
         self.goal_point = goal_point #m
         self.stopping_dist = stopping_dist #m
+        self.goal_node_id = -1
 
         #Trajectory Simulation Parameters
         self.timestep = 1.0 #s
@@ -94,7 +95,7 @@ class PathPlanner:
         #Return an [x,y] coordinate to drive the robot towards (1, 2)
 
         sample_goal_prob = np.random.rand()
-        if sample_goal_prob < 0.1:
+        if sample_goal_prob < 0.06:
             # samples the goal position
             sample = self.goal_point
         else:
@@ -336,7 +337,7 @@ class PathPlanner:
     def rrt_planning(self):
         #This function performs RRT on the given map and robot
         #You do not need to demonstrate this function to the TAs, but it is left in for you to check your work
-        for i in range(10000): #Most likely need more iterations than this to complete the map!
+        while True: #Most likely need more iterations than this to complete the map!
             # Sample map space
             point = self.sample_map_space(visualize=0)
 
@@ -365,9 +366,8 @@ class PathPlanner:
             if np.linalg.norm(new_node_pose[0:2] - self.goal_point) <= self.stopping_dist:
                 # self.goal_nodes[len(self.nodes) - 1] = self.nodes[-1]
                 # self.best_goal_node_id = len(self.nodes) - 1
+                self.goal_node_id = new_node_id
                 break
-
-            
         return self.nodes
     
     def rrt_star_planning(self):
@@ -395,13 +395,17 @@ class PathPlanner:
             print("TO DO: Check for early end")
         return self.nodes
     
-    def recover_path(self, node_id = -1):
+    def recover_path(self, node_id=-1, visualize=0):
         path = [self.nodes[node_id].pose]
         current_node_id = self.nodes[node_id].parent_id
         while current_node_id > -1:
             path.append(self.nodes[current_node_id].pose)
             current_node_id = self.nodes[current_node_id].parent_id
         path.reverse()
+
+        if visualize:
+            for pose in path:
+                self.window.add_point(pose[0:2], radius=5, color=(0, 255, 0), update=True)
         return path
 
 
@@ -474,7 +478,7 @@ def main():
     # test rrt_plan
     path_planner.rrt_planning()
 
-
+    path = path_planner.recover_path(path_planner.goal_node_id, visualize=1)
     input("")
 
 
