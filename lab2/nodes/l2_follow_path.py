@@ -138,11 +138,28 @@ class PathFollower():
             self.update_pose()
             self.check_and_update_goal()
 
+            # shrink the control horizon as the robot approaches the target such that 
+            # it can retain a fast velocity
+            dist_from_goal = np.linalg.norm(self.pose_in_map_np[0:2] - self.cur_goal[0:2])
+            min_time_to_goal_trans = dist_from_goal / 0.26
+            if np.linalg.norm(dist_from_goal) < MIN_TRANS_DIST_TO_USE_ROT:
+                abs_angle_diff = np.abs(self.pose_in_map_np[2] - self.cur_goal[2])
+                rot_dist_error = np.minimum(np.pi * 2 - abs_angle_diff, abs_angle_diff)
+                min_time_to_goal_rot = np.abs(rot_dist_error) / 1.82
+            else:
+                min_time_to_goal_rot = 0
+            control_horizon = min_time_to_goal_trans + min_time_to_goal_rot
+
+            if control_horizon < 0.75:
+                control_horizon = 0.75
+            elif control_horizon > CONTROL_HORIZON:
+                control_horizon = CONTROL_HORIZON
+    
             pose_traj, last_valid_substep, last_valid_poses = self.path_planner.trajectory_rollout(
                 vel=self.all_opts[:, 0:1], 
                 rot_vel=self.all_opts[:, 1:2], 
                 pose=self.pose_in_map_np, 
-                timestep=CONTROL_HORIZON,
+                timestep=control_horizon,
                 num_substeps=self.horizon_timesteps,
             )  
 
@@ -155,15 +172,12 @@ class PathFollower():
                 trans_dist_error = valid_pose_traj[:, -1, 0:2] - self.cur_goal[0:2].reshape(1, 2)
                 trans_cost = np.linalg.norm(trans_dist_error, axis=1)
 
-                if np.linalg.norm(self.pose_in_map_np[0:2] - self.cur_goal[0:2]) < MIN_TRANS_DIST_TO_USE_ROT:
+                if np.linalg.norm(dist_from_goal) < MIN_TRANS_DIST_TO_USE_ROT:
                     abs_angle_diff = np.abs(valid_pose_traj[:, -1, 2] - self.cur_goal[2])
-                    
                     rot_dist_error = np.minimum(np.pi * 2 - abs_angle_diff, abs_angle_diff)
-                    rot_cost = np.abs(rot_dist_error)
+                    rot_cost = 1*np.abs(rot_dist_error)
                 else:
                     rot_cost = 0
-                
-
                 final_cost = trans_cost + rot_cost
 
                 best_valid_vel_idx = np.argmin(final_cost)
@@ -172,36 +186,10 @@ class PathFollower():
                 best_valid_pose_traj = valid_pose_traj[best_valid_vel_idx]
                 self.local_path_pub.publish(utils.se2_pose_list_to_path(best_valid_pose_traj, 'map'))
 
-
-
-            # if pose_traj.shape[0] == 0:
-            #     control = [-.1, 0]
-            # else:
-            #     trans_dist_error = last_valid_poses[:, 0:2] - self.cur_goal[0:2].reshape(1, 2)
-            #     trans_cost = np.linalg.norm(trans_dist_error, axis=1)
-
-            #     if np.linalg.norm(self.pose_in_map_np[0:2] - self.cur_goal[0:2]) < MIN_TRANS_DIST_TO_USE_ROT:
-            #         abs_angle_diff = np.abs(last_valid_poses[:, 2] - self.cur_goal[2])
-            #         rot_dist_error = np.minimum(np.pi * 2 - abs_angle_diff, abs_angle_diff)
-            #         rot_cost = 10 * np.abs(rot_dist_error)
-            #     else:
-            #         rot_cost = 0
-
-            #     final_cost = trans_cost + rot_cost
-
-            #     best_valid_vel_idx = np.argmin(final_cost)
-
-            #     control = self.all_opts[best_valid_vel_idx]
-            #     best_valid_pose_traj = pose_traj[best_valid_vel_idx, 0:last_valid_substep[best_valid_vel_idx]+1, :]
-            #     self.local_path_pub.publish(utils.se2_pose_list_to_path(best_valid_pose_traj, 'map'))
-
-
-
-
             self.cmd_pub.publish(utils.unicyle_vel_to_twist(control))
 
-            print("Selected control: {control}, Loop time: {time}, Max time: {max_time}".format(
-                control=control, time=(rospy.Time.now() - tic).to_sec(), max_time=1/CONTROL_RATE))
+            # print("Selected control: {control}, Loop time: {time}, Max time: {max_time}".format(
+            #     control=control, time=(rospy.Time.now() - tic).to_sec(), max_time=1/CONTROL_RATE))
 
             self.rate.sleep()
 
