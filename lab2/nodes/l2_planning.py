@@ -314,7 +314,6 @@ class PathPlanner:
         # clip any pixel coords outside of the range to within the range
         circle_points = np.clip(circle_points, a_min=[0, 0], a_max=[self.map_shape[0]-1, self.map_shape[1]-1])
         return circle_points
-    #Note: If you have correctly completed all previous functions, then you should be able to create a working RRT function
 
 
     #RRT* specific functions
@@ -323,6 +322,7 @@ class PathPlanner:
         card_V = len(self.nodes)
         return min(self.gamma_RRT * (np.log(card_V) / card_V ) ** (1.0/2.0), self.epsilon)
     
+
     def connect_node_to_point(self, node_i, point_f, visualize=0):
         #Given two nodes find the non-holonomic path that connects them
         #Settings
@@ -431,21 +431,26 @@ class PathPlanner:
 
         return pose_traj[0], last_valid_substep[0], last_valid_poses[0]
 
-            
-
-
-
-
     
     def cost_to_come(self, trajectory_o):
         #The cost to get to a node from lavalle 
-        print("TO DO: Implement a cost to come metric")
-        return 0
+        cost_to_come = np.linalg.norm(trajectory_o[1:, 0:2] - trajectory_o[0:-1, 0:2], axis=1).sum()
+        return cost_to_come
+
     
     def update_children(self, node_id):
         #Given a node_id with a changed cost, update all connected nodes with the new cost
-        print("TO DO: Update the costs of connected nodes after rewiring.")
-        return
+        parent_node = self.nodes[node_id]
+        children_ids = node.children_ids
+        for child_id in children_ids:
+            #traj = self.connect_node_to_point(node.point, self.nodes[child].point)
+            # TODO: IMPLEMENT traj_to_children (this is needed to calculate the exact arclength)
+            traj = parent_node.traj_to_children[child_id]
+            # assert not np.any(np.isnan(traj))
+            self.nodes[child_id].cost = parent_node.cost + self.cost_to_come(traj)
+            self.update_children(child_id)
+        
+    
 
     #Planner Functions
     def rrt_planning(self):
