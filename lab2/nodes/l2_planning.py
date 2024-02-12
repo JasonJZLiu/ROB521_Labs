@@ -9,6 +9,7 @@ import matplotlib.image as mpimg
 from skimage.draw import disk
 from scipy.linalg import block_diag
 from scipy.spatial import cKDTree
+from scipy.linalg import inv
 
 
 
@@ -58,8 +59,6 @@ class PathPlanner:
 
         #Robot information
         self.robot_radius = 0.22 #m
-        # self.vel_max = 0.5 #m/s (Feel free to change!)
-        # self.rot_vel_max = 1.5 #0.2 #rad/s (Feel free to change!)
 
         # self.vel_max = 0.26 #m/s (Feel free to change!)
         # self.rot_vel_max = 1.82 #0.2 #rad/s (Feel free to change!)
@@ -88,8 +87,10 @@ class PathPlanner:
         
         #Pygame window for visualization
         # (1000, 1000)
+        # self.window = pygame_utils.PygameWindow(
+        #     "Path Planner", (2500, 2500), self.occupancy_map.shape, self.map_settings_dict, self.goal_point, self.stopping_dist)
         self.window = pygame_utils.PygameWindow(
-            "Path Planner", (2500, 2500), self.occupancy_map.shape, self.map_settings_dict, self.goal_point, self.stopping_dist)
+            "Path Planner", (3000, 3000), self.occupancy_map.shape, self.map_settings_dict, self.goal_point, self.stopping_dist)
         return
 
 
@@ -224,7 +225,7 @@ class PathPlanner:
 
         # kinematics closed-form solution:
         # x(t) = x_0 + (v/w)*[sin(wt+theta_0) - sin(theta_0)]
-        # y(t) = x_0 + (v/w)*[cos(wt+theta_0) - cos(theta_0)]
+        # y(t) = y_0 - (v/w)*[cos(wt+theta_0) - cos(theta_0)]
         # theta(t) = theta_0 + w*t
 
         num_vel = vel.shape[0]
@@ -249,6 +250,9 @@ class PathPlanner:
             y_0 - (vel/rot_vel)*(np.cos(rot_vel*t + theta_0) - np.cos(theta_0)),
         )
         theta_traj = theta_0 + rot_vel*t
+
+        # normalize thetas to be between -pi and pi
+        theta_traj = (theta_traj + np.pi) % (2 * np.pi) - np.pi
 
         # (num_vel, num_substeps, 3)
         pose_traj = np.dstack((x_traj, y_traj, theta_traj))
@@ -319,13 +323,119 @@ class PathPlanner:
         card_V = len(self.nodes)
         return min(self.gamma_RRT * (np.log(card_V) / card_V ) ** (1.0/2.0), self.epsilon)
     
-    def connect_node_to_point(self, node_i, point_f):
+    def connect_node_to_point(self, node_i, point_f, visualize=0):
         #Given two nodes find the non-holonomic path that connects them
         #Settings
         #node is a 3 by 1 node
         #point is a 2 by 1 point
-        print("TO DO: Implement a way to connect two already existing nodes (for rewiring).")
-        return np.zeros((3, self.num_substeps))
+        
+        pose_i = node_i.pose.reshape(3,)
+        x_w_0 = pose_i[0]
+        y_w_0 = pose_i[1]
+        theta_0 = pose_i[2]
+
+        point_f = point_f.reshape(2,)
+        x_w_f = point_f[0]
+        y_w_f = point_f[1]
+
+        # find point_f in robot frame
+        w_T_r = np.array([
+            [np.cos(pose_i[2]), -np.sin(pose_i[2]), pose_i[0]],
+            [np.sin(pose_i[2]),  np.cos(pose_i[2]), pose_i[1]],
+            [0                ,  0                ,  1.0     ],
+        ])
+        r_T_w = inv(w_T_r)
+        point_f_robot_frame = r_T_w @ np.array([point_f[0], point_f[1], 1.0]).T
+        x_r_f = point_f_robot_frame[0]
+        y_r_f = point_f_robot_frame[1]
+
+        if np.isclose(y_r_f, 0.0):
+            # drive straight since no lateral deviation in robot's frame
+            # substeps = np.ceil(d / self.robot_radius).astype(np.int64) + 1
+            pose_s = np.array([x_w_f, y_w_f, theta_0])
+            pose_traj = np.linspace(pose_i, pose_s, self.num_substeps)[None, ...]
+        else:
+            traj_radius = (x_r_f**2 + y_r_f**2) / (2*y_r_f)
+            traj_center_robot_frame = np.array([0.0, traj_radius, 1]).T
+            traj_center = (w_T_r @ traj_center_robot_frame).reshape(3,)[0:2]
+            # self.window.add_point(traj_center, radius=5)
+
+            # calculate the linear and angular velocities to achieve traj_radius
+            rot_vel = self.rot_vel_max
+            vel = traj_radius * rot_vel
+
+            if vel > self.vel_max:
+                vel = self.vel_max
+                rot_vel = vel / traj_radius
+
+            # calculate time step assuming maximum angular velocity
+            theta_f = np.arctan2(
+                (x_w_f - x_w_0) / traj_radius + np.sin(theta_0),
+                -(y_w_f - y_w_0) / traj_radius + np.cos(theta_0),
+            )
+            angle_distance = (theta_f - theta_0 + np.pi) % (2*np.pi) - np.pi
+            timestep = (angle_distance) / rot_vel
+
+            if timestep < 0:
+                timestep *= -1
+                rot_vel *= -1
+                vel *= -1
+
+            # (num_substeps, )
+            t = np.linspace(0, timestep, self.num_substeps)
+
+            # simulate trajectories for all timesteps (num_vel, num_substeps)
+            x_traj = np.where(
+                np.isclose(rot_vel, 0), 
+                x_w_0 + vel*t*np.cos(theta_0), 
+                x_w_0 + (vel/rot_vel)*(np.sin(rot_vel*t + theta_0) - np.sin(theta_0)),
+            )
+            y_traj = np.where(
+                np.isclose(rot_vel, 0), 
+                y_w_0 + vel*t*np.sin(theta_0), 
+                y_w_0 - (vel/rot_vel)*(np.cos(rot_vel*t + theta_0) - np.cos(theta_0)),
+            )
+            theta_traj = theta_0 + rot_vel*t
+
+            # normalize thetas to be between -pi and pi
+            theta_traj = (theta_traj + np.pi) % (2 * np.pi) - np.pi
+
+            # (1, num_substeps, 3)
+            pose_traj = np.dstack((x_traj, y_traj, theta_traj))
+
+
+        # (1, num_substeps)
+        collision_mask = self.collision_check(pose_traj.reshape(-1, 3)[:, 0:2]).reshape(-1, self.num_substeps)
+        # set to True for all substeps after the first True (1, num_substeps)
+        collision_mask_corrected = np.cumsum(collision_mask, axis=1).astype(bool)
+        # (1, num_substeps, 3)
+        pose_traj[collision_mask_corrected] = np.array([np.nan, np.nan, np.nan])
+
+        # first substep that encounters a collision
+        first_collision_indices = np.argmax(collision_mask_corrected, axis=1)
+        # rows that do not have collisions
+        no_collision_indices = np.all(~collision_mask_corrected, axis=1)
+        # for no collision rows, return the last substep idx
+        # for rows with collisions, return the last valid idx
+        last_valid_substep = np.where(
+            no_collision_indices, 
+            self.num_substeps - 1, 
+            first_collision_indices - 1
+        )
+        
+        last_valid_poses = pose_traj[np.arange(1), last_valid_substep, :]
+
+        if visualize != 0:
+            for i in range(pose_traj[0].shape[0]):
+                self.window.add_se2_pose(pose_traj[0, i], color=(0, 0, 255), length=10)
+
+        return pose_traj[0], last_valid_substep[0], last_valid_poses[0]
+
+            
+
+
+
+
     
     def cost_to_come(self, trajectory_o):
         #The cost to get to a node from lavalle 
@@ -410,6 +520,7 @@ class PathPlanner:
         if visualize:
             for pose in path:
                 self.window.add_point(pose[0:2], radius=5, color=(0, 255, 0), update=True)
+                self.window.add_se2_pose(pose, length=5, color=(0, 255, 0), update=True)
         return path
 
 
@@ -420,15 +531,20 @@ def main():
 
     #robot information
     goal_point = np.array([10.0, 10.0]) #m
+    # goal_point = np.array([20.0, -30.0]) #m
+
     stopping_dist = 0.5 #m
 
     #RRT precursor
     path_planner = PathPlanner(map_filename, map_setings_filename, goal_point, stopping_dist)
-    # nodes = path_planner.rrt_star_planning()
-    # node_path_metric = np.hstack(path_planner.recover_path())
+
+    # # nodes = path_planner.rrt_star_planning()
+    # nodes = path_planner.rrt_planning()
+    # node_path_metric = np.array(path_planner.recover_path(visualize=1))
 
     # #Leftover test functions
-    # np.save("shortest_path.npy", node_path_metric)
+    # np.save("rrt_path.npy", node_path_metric)
+    # input("")
 
 
     # TEST
@@ -479,11 +595,30 @@ def main():
     # path_planner.window.add_se2_pose(node_0.pose, length=10)
     # path_planner.robot_controller(node_0, sampled_point, visualize=2)
 
-    # test rrt_plan
-    path_planner.rrt_planning()
+    # # test rrt_plan
+    # path_planner.rrt_planning()
 
-    path = path_planner.recover_path(path_planner.goal_node_id, visualize=1)
-    input("")
+    # path = path_planner.recover_path(path_planner.goal_node_id, visualize=1)
+    # input("")
+    
+    # # test connect_node_to_point
+    # node_i = Node(
+    #     pose=np.array([10, 10, 0.1]),
+    #     parent_id=-1,
+    #     cost=0,
+    # )
+
+    # # point_f = np.array([11, 12.])
+    # # point_f = np.array([9, 12.])
+    # # point_f = np.array([11, 8])
+    # # point_f = np.array([9, 8])
+
+    # point_f = np.array([10, 5.])
+    # path_planner.window.add_point(point_f, radius=5, color=(0, 255, 0))
+    # path_planner.connect_node_to_point(node_i, point_f, visualize=1)
+    # input("")
+
+    
 
 
 

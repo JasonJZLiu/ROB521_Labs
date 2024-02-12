@@ -21,14 +21,14 @@ from l2_planning import PathPlanner
 
 
 TRANS_GOAL_TOL = .1  # m, tolerance to consider a goal complete
-ROT_GOAL_TOL = .3  # rad, tolerance to consider a goal complete
-TRANS_VEL_OPTS = [0, 0.025, 0.13, 0.26]  # m/s, max of real robot is .26
+ROT_GOAL_TOL = 0.1 #.3  # rad, tolerance to consider a goal complete
+TRANS_VEL_OPTS = [-0.26, -0.13, -0.025, 0, 0.025, 0.13, 0.26] # m/s, max of real robot is .26
 ROT_VEL_OPTS = np.linspace(-1.82, 1.82, 11)  # rad/s, max of real robot is 1.82
 CONTROL_RATE = 5  # Hz, how frequently control signals are sent
 CONTROL_HORIZON = 5  # seconds. if this is set too high and INTEGRATION_DT is too low, code will take a long time to run!
 INTEGRATION_DT = .025  # s, delta t to propagate trajectories forward by
 COLLISION_RADIUS = 0.225  # m, radius from base_link to use for collisions, min of 0.2077 based on dimensions of .281 x .306
-ROT_DIST_MULT = .1  # multiplier to change effect of rotational distance in choosing correct control
+ROT_DIST_MULT = 1.0  # multiplier to change effect of rotational distance in choosing correct control
 OBS_DIST_MULT = .1  # multiplier to change the effect of low distance to obstacles on a path
 MIN_TRANS_DIST_TO_USE_ROT = TRANS_GOAL_TOL  # m, robot has to be within this distance to use rot distance in cost
 PATH_NAME = 'path.npy'  # saved path from l2_planning.py, should be in the same directory as this file
@@ -50,7 +50,6 @@ class PathFollower():
 
         # constant transforms
         self.map_odom_tf = self.tf_buffer.lookup_transform('map', 'odom', rospy.Time(0), rospy.Duration(2.0)).transform
-        print(self.map_odom_tf)
 
         # subscribers and publishers
         self.cmd_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=1)
@@ -91,8 +90,8 @@ class PathFollower():
         cur_dir = os.path.dirname(os.path.realpath(__file__))
 
         # to use the temp hardcoded paths above, switch the comment on the following two lines
-        # self.path_tuples = np.load(os.path.join(cur_dir, 'path.npy')).T
-        self.path_tuples = np.array(TEMP_HARDCODE_PATH)
+        self.path_tuples = np.load(os.path.join(cur_dir, 'rrt_path.npy'))
+        # self.path_tuples = np.array(TEMP_HARDCODE_PATH)
 
         self.path = utils.se2_pose_list_to_path(self.path_tuples, 'map')
         self.global_path_pub.publish(self.path)
@@ -150,10 +149,8 @@ class PathFollower():
                 min_time_to_goal_rot = 0
             control_horizon = min_time_to_goal_trans + min_time_to_goal_rot
 
-            if control_horizon < 0.75:
-                control_horizon = 0.75
-            elif control_horizon > CONTROL_HORIZON:
-                control_horizon = CONTROL_HORIZON
+            control_horizon = max(control_horizon, 0.75)
+            control_horizon = min(control_horizon, CONTROL_HORIZON)
     
             pose_traj, last_valid_substep, last_valid_poses = self.path_planner.trajectory_rollout(
                 vel=self.all_opts[:, 0:1], 
@@ -175,10 +172,10 @@ class PathFollower():
                 if np.linalg.norm(dist_from_goal) < MIN_TRANS_DIST_TO_USE_ROT:
                     abs_angle_diff = np.abs(valid_pose_traj[:, -1, 2] - self.cur_goal[2])
                     rot_dist_error = np.minimum(np.pi * 2 - abs_angle_diff, abs_angle_diff)
-                    rot_cost = 1*np.abs(rot_dist_error)
+                    rot_cost = np.abs(rot_dist_error)
                 else:
                     rot_cost = 0
-                final_cost = trans_cost + rot_cost
+                final_cost = trans_cost + ROT_DIST_MULT*rot_cost
 
                 best_valid_vel_idx = np.argmin(final_cost)
 
