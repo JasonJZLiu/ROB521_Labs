@@ -86,7 +86,7 @@ def tf_to_se2_tf_mat(tf):
     return mat
 
 
-def se2_pose_list_to_path(pose):
+def se2_pose_from_pose(pose):
     # convert a ros pose to a (3,) np array in SE2
     return np.array([pose.position.x, pose.position.y, euler_from_ros_quat(pose.orientation)[2]])
 

@@ -538,16 +538,17 @@ def main():
     #RRT precursor
     path_planner = PathPlanner(map_filename, map_setings_filename, goal_point, stopping_dist)
 
-    # # nodes = path_planner.rrt_star_planning()
-    # nodes = path_planner.rrt_planning()
-    # node_path_metric = np.array(path_planner.recover_path(visualize=1))
+    # nodes = path_planner.rrt_star_planning()
+    nodes = path_planner.rrt_planning()
+    node_path_metric = np.array(path_planner.recover_path(visualize=1))
 
-    # #Leftover test functions
-    # np.save("rrt_path.npy", node_path_metric)
-    # input("")
+    #Leftover test functions
+    np.save("rrt_path.npy", node_path_metric)
+    input("")
 
 
-    # TEST
+
+    # ------- TEST -------
     # from PIL import Image
     # map_image = Image.open("../maps/"+map_filename).convert('RGB')
     # map_pixels = map_image.load()
