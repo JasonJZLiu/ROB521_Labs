@@ -79,11 +79,31 @@ class PathPlanner:
         self.timestep = 1.0 #s
         self.num_substeps = 20 #10
 
+        #Trajectory Rollout Options
+        vel_grid_res = 5 #4
+        rot_vel_res = 9 #7
+        num_vel = vel_grid_res*rot_vel_res
+
+        vel_range = np.linspace(-self.vel_max, self.vel_max, vel_grid_res)
+        rot_vel_range = np.linspace(-self.rot_vel_max, self.rot_vel_max, rot_vel_res)
+        vel_grid, rot_vel_grid = np.meshgrid(vel_range, rot_vel_range, indexing='ij')
+        # (num_vel, 1)
+        vel_candidates = vel_grid.flatten().reshape(-1, 1)
+        rot_vel_candidates = rot_vel_grid.flatten().reshape(-1, 1)
+
+        self.vel_options = np.hstack([vel_candidates, rot_vel_candidates])
+
+        # if there is a [0, 0] option, remove it
+        all_zeros_index = (np.abs(self.vel_options) < [0.001, 0.001]).all(axis=1).nonzero()[0]
+        if all_zeros_index.size > 0:
+            self.vel_options = np.delete(self.vel_options, all_zeros_index, axis=0)
+
         #Planning storage
         self.nodes = [Node(np.zeros((3,)), -1, 0)]
 
         #Sampling Parameters
         self.sampling_space_params = dict()
+        self.sampling_space_params["goal_range_multiplier"] = 4
 
         #RRT* Specific Parameters
         self.lebesgue_free = np.sum(self.occupancy_map) * self.map_settings_dict["resolution"] **2
@@ -105,27 +125,23 @@ class PathPlanner:
     def sample_map_space(self, visualize=0):
         #Return an [x,y] coordinate to drive the robot towards
 
-        if self.best_goal_node_id == -1:
-            # a path has not been found yet
+        sample_goal_range_prob = np.random.rand()
+        if sample_goal_range_prob < 0.06:
+            # samples the goal position
             sample_goal_prob = np.random.rand()
-            if sample_goal_prob < 0.06:
-                # samples the goal position
-                # sample = self.goal_point
-                delta = 4*self.stopping_dist * np.random.randn(2,)
-                sample = self.goal_point + delta
+            if sample_goal_prob < 0.5:
+                sample = self.goal_point
             else:
+                k = self.sampling_space_params["goal_range_multiplier"]
+                delta = k*self.stopping_dist * np.random.randn(2,)
+                sample = self.goal_point + delta
+        else:
+            if self.best_goal_node_id == -1:
+                # a path has not been found yet
                 sample = (self.bounds[1] - self.bounds[0])*np.random.rand(2) + self.bounds[0]
                 sample = sample.reshape(2,)
-        else:
-            # perform informed RRT* sampling
-
-            sample_goal_prob = np.random.rand()
-            if sample_goal_prob < 0.06:
-                # samples the goal position
-                # sample = self.goal_point
-                delta = self.stopping_dist * np.random.randn(2,)
-                sample = self.goal_point + delta
-            else: 
+            else:
+                # perform informed RRT* sampling
                 a = self.sampling_space_params["a"]
                 center = self.sampling_space_params["center"]
 
@@ -134,8 +150,7 @@ class PathPlanner:
                 x = center[0] + r * np.cos(angle)
                 y = center[1] + r * np.sin(angle)
                 sample = np.array([x, y])
-
-
+            
         if visualize != 0:
             self.window.add_point(sample, radius=5, color=(255, 0, 0), update=True)
         
@@ -204,17 +219,8 @@ class PathPlanner:
         # Idea: perform trajectory rollout on various velocities, select the point closest to point_s
         point_s = point_s.reshape(1, 2)
 
-        vel_grid_res = 4
-        rot_vel_res = 9 #7
-        num_vel = vel_grid_res*rot_vel_res
-
-        vel_range = np.linspace(-self.vel_max, self.vel_max, vel_grid_res)
-        rot_vel_range = np.linspace(-self.rot_vel_max, self.rot_vel_max, rot_vel_res)
-        vel_grid, rot_vel_grid = np.meshgrid(vel_range, rot_vel_range, indexing='ij')
-        # (num_vel, 1)
-        vel_candidates = vel_grid.flatten().reshape(-1, 1)
-        rot_vel_candidates = rot_vel_grid.flatten().reshape(-1, 1)
-        # print(np.hstack([vel_candidates, rot_vel_candidates]))
+        vel_candidates = self.vel_options[:, 0]
+        rot_vel_candidates = self.vel_options[:, 1]
 
         # rollout the trajectories given the velocities
         pose_traj, last_valid_substep, last_valid_poses = self.trajectory_rollout(
@@ -697,10 +703,8 @@ class PathPlanner:
         center = (self.best_goal_pose_traj[0, 0:2] + self.best_goal_pose_traj[-1, 0:2]) / 2
         self.sampling_space_params["a"] = a
         self.sampling_space_params["center"] = center
+        self.sampling_space_params["goal_range_multiplier"] = 1
 
-
-
-            
 
     def recover_path(self, node_id=-1, visualize=0):
         path = [self.nodes[node_id].pose]
