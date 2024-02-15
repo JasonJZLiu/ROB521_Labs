@@ -74,7 +74,7 @@ class PathPlanner:
 
         #Trajectory Simulation Parameters
         self.timestep = 1.0 #s
-        self.num_substeps = 10 #10
+        self.num_substeps = 20 #10
 
         #Planning storage
         self.nodes = [Node(np.zeros((3,)), -1, 0)]
@@ -493,25 +493,27 @@ class PathPlanner:
                 break
         return self.nodes
     
-    def rrt_star_planning(self):
-        #This function performs RRT* for the given map and robot        
+    def rrt_star_planning(self, visualize=1, max_iteration=40000):
+        #This function performs RRT* for the given map and robot
+        iteration = 0
         while True: 
+            iteration += 1
             # Sample map space
             point = self.sample_map_space(visualize=0)
 
             # Get the closest point
             closest_node_id = self.closest_nodes(point, k=1)
 
-            # Simulate driving the robot towards the closest point
-            pose_traj = self.simulate_trajectory(self.nodes[closest_node_id], point, visualize=1)
+            # Simulate driving the robot from the closest point to the sampled point
+            pose_traj_from_closest_node = self.simulate_trajectory(self.nodes[closest_node_id], point, visualize=visualize)
 
             # Check if the new node pose is a duplicate and skip if it is
-            new_node_pose = pose_traj[-1, :]
+            new_node_pose = pose_traj_from_closest_node[-1, :]
             if self.check_if_duplicate(new_node_pose):
                 continue
 
             # Compute the cost-to-come of the new node
-            new_node_cost_to_come = self.nodes[closest_node_id].cost + self.cost_to_come[pose_traj]
+            new_node_cost_to_come = self.nodes[closest_node_id].cost + self.cost_to_come(pose_traj_from_closest_node)
 
             # Add the last pose in the trajectory as a Node and update closest node's children            
             new_node = Node(
@@ -522,11 +524,97 @@ class PathPlanner:
             self.nodes.append(new_node)
             new_node_id = len(self.nodes) - 1
             self.nodes[closest_node_id].children_ids.append(new_node_id)
-            self.nodes[closest_node_id].pose_traj_to_children[new_node_id] = pose_traj
+            self.nodes[closest_node_id].pose_traj_to_children[new_node_id] = pose_traj_from_closest_node
+
+            # Query the KDTree for all node ids within the ball_radius
+            nodes_KDTree = cKDTree([node.pose[0:2] for node in self.nodes])
+            close_node_ids = nodes_KDTree.query_ball_point(new_node_pose[0:2], self.ball_radius())
+            # Remove the new_node id in close_node_indices
+            close_node_ids.remove(new_node_id)
+
+            
+            best_node_id = None
+            best_cost_to_come = new_node.cost
+            best_pose_traj = None
+            for close_node_id in close_node_ids:
+                # compute the potential connection between the close_node to the new_node
+                potential_pose_traj, last_valid_substep, last_valid_pose = self.connect_node_to_point(
+                    self.nodes[close_node_id], new_node.pose[0:2], visualize=0
+                )
+
+                # reject path with collisions
+                if last_valid_substep != (potential_pose_traj.shape[0]-1):
+                    # cannot connect to new_node due to collision
+                    continue
+
+                potential_cost_to_come = self.nodes[close_node_id].cost + self.cost_to_come(potential_pose_traj)
+                if potential_cost_to_come < best_cost_to_come:
+                    best_cost_to_come = potential_cost_to_come
+                    best_node_id = close_node_id
+                    best_pose_traj = potential_pose_traj
+            
+
+            if best_node_id is not None:
+                # there exists a node that yields a lower cost-to-come than the currently wired node
+                # hence needs re-wiring
+
+                # remove existing connection from closest_node_id
+                if visualize != 0:
+                    existing_pose_traj = self.nodes[closest_node_id].pose_traj_to_children[new_node_id]
+                    for i in range(1, existing_pose_traj.shape[0]):
+                        self.window.remove_point(existing_pose_traj[i, 0:2], radius=2, update=False)
+                        # self.window.add_point(existing_pose_traj[i, 0:2], radius=2, color=(255, 0, 0), update=False)
+                    self.window.update()
+                self.nodes[closest_node_id].children_ids.remove(new_node_id)
+                del self.nodes[closest_node_id].pose_traj_to_children[new_node_id]
+                
+                # re-wire to connect from best_node
+                new_node.pose = best_pose_traj[-1]
+                new_node.parent = best_node_id
+                new_node.cost = best_cost_to_come
+                self.nodes[best_node_id].children_ids.append(new_node_id)
+                self.nodes[best_node_id].pose_traj_to_children[new_node_id] = best_pose_traj
+
+                if visualize != 0:
+                    for i in range(best_pose_traj.shape[0]):
+                        self.window.add_point(best_pose_traj[i, 0:2], radius=2, color=(0, 0, 255), update=False)
+                    self.window.update()
+                
+              
+                
+            # if iteration == 40:
+            #     print(self.nodes[1].pose)
+            #     print(self.nodes[1].pose_traj_to_children)
+            #     input("")
+    
+            # print(best_node_id)
+            # input("")
+
+                
+            # if visualize != 0:
+            #     for i in range(pose_traj_from_closest_node.shape[0]):
+            #         self.window.add_point(pose_traj_from_closest_node[i, 0:2], radius=2, color=(0, 0, 255), update=False)
+            #     self.window.update()
+
+                
+
+
+            # nodes_KDTree = cKDTree([node.pose[0:2] for node in self.nodes])
+            # # close_node_indices = nodes_KDTree.query_ball_point(new_node.pose[0:2], self.ball_radius())
+            # close_node_indices = nodes_KDTree.query_ball_point(new_node.pose[0:2], 0.0001)
+
+            # print(self.ball_radius())
+            # print(type(close_node_indices))
+            # input("")
 
             
 
 
+            # Check if new_node's neighoring circle region has any other nodes
+            # If so, compute the edge cost from each of those neighbors to the new node + their original cost
+            # Pick the lowest one. If the lowest cost to come is lower than new_node's current cost, rewire
+            #   In new_node's parent node, get rid of new node id as a child
+            
 
 
         return self.nodes

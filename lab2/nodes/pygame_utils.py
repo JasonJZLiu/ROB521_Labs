@@ -48,6 +48,15 @@ class PygameWindow:
         pygame.draw.circle(self.screen, color, point_vec, radius, width)
         if update:
             pygame.display.update()
+    
+    def remove_point(self, map_frame_point, radius=1, width=0, update=True):
+        map_frame_point = map_frame_point.copy()
+        map_frame_point[1] = -map_frame_point[1]  # for top left origin
+        point_vec = self.point_to_vec(np.array(map_frame_point) / self.meters_per_pixel + self.origin_pixels)
+        pygame.draw.circle(self.screen, COLORS['w'], point_vec, radius, width)
+        if update:
+            pygame.display.update()
+        
 
     def add_se2_pose(self, map_frame_pose, length=1, width=0, color=COLORS['k'], update=True):
         map_frame_pose = map_frame_pose.copy()
