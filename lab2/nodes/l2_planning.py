@@ -80,7 +80,7 @@ class PathPlanner:
         self.num_substeps = 20 #10
 
         #Trajectory Rollout Options
-        vel_grid_res = 5 #4
+        vel_grid_res = 7 #4 
         rot_vel_res = 9 #7
         num_vel = vel_grid_res*rot_vel_res
 
@@ -213,18 +213,18 @@ class PathPlanner:
         return collision_mask
 
 
-    def simulate_trajectory(self, node_i, point_s, visualize=0):
+    def simulate_trajectory(self, node_i, point_s, visualize=0, frequent_viz_update=True):
         #Simulates the non-holonomic motion of the robot.
         #This function drives the robot from node_i towards point_s. This function does has many solutions!
         #node_i is a 3 by 1 vector [x;y;theta] this can be used to construct the SE(2) matrix T_{OI} in course notation
         #point_s is the sampled point vector [x; y]
         
         # Return: (N, 3), where N can change depending on the length of the trajectory
-        vel, rot_vel, robot_traj = self.robot_controller(node_i, point_s, visualize)
+        vel, rot_vel, robot_traj = self.robot_controller(node_i, point_s, visualize, frequent_viz_update)
         return robot_traj
     
 
-    def robot_controller(self, node_i, point_s, visualize=0):
+    def robot_controller(self, node_i, point_s, visualize=0, frequent_viz_update=True):
         #This controller determines the velocities that will nominally move the robot from node i to node s
         #Max velocities should be enforced
 
@@ -259,7 +259,8 @@ class PathPlanner:
             # draw best path
             for i in range(best_traj.shape[0]):
                 self.window.add_point(best_traj[i, 0:2], radius=2, color=(0, 0, 255), update=False)
-            self.window.update()
+            if frequent_viz_update:
+                self.window.update()
 
         return best_vel, best_rot_vel, best_traj
 
@@ -495,8 +496,13 @@ class PathPlanner:
     def cost_to_come(self, trajectory_o):
         #The cost to get to a node from lavalle 
         # trajectory_o: (N, 3) 
-        cost_to_come = np.linalg.norm(trajectory_o[1:, 0:2] - trajectory_o[0:-1, 0:2], axis=1).sum()
-        return cost_to_come
+        trans_cost_to_come = np.linalg.norm(trajectory_o[1:, 0:2] - trajectory_o[0:-1, 0:2], axis=1).sum()
+
+        abs_angle_diff = np.abs(trajectory_o[1:, 2] - trajectory_o[0:-1, 2])
+        rot_dist_error = np.minimum(np.pi * 2 - abs_angle_diff, abs_angle_diff)
+        rot_cost_to_come = np.abs(rot_dist_error).sum() * self.robot_radius
+
+        return trans_cost_to_come + rot_cost_to_come * 0.1
 
     
     def update_children(self, node_id):
@@ -552,7 +558,8 @@ class PathPlanner:
 
         return self.nodes
     
-    def rrt_star_planning(self, visualize=1, max_iteration=40000, save_path=True):
+
+    def rrt_star_planning(self, visualize=1, frequent_viz_update=False, max_iteration=40000, save_path=True):
         #This function performs RRT* for the given map and robot
         iteration = 0
         while True:
@@ -566,7 +573,9 @@ class PathPlanner:
             closest_node_id = self.closest_nodes(point, k=1)
 
             # Simulate driving the robot from the closest point to the sampled point
-            pose_traj_from_closest_node = self.simulate_trajectory(self.nodes[closest_node_id], point, visualize=visualize)
+            pose_traj_from_closest_node = self.simulate_trajectory(
+                self.nodes[closest_node_id], point, visualize=visualize, frequent_viz_update=frequent_viz_update
+            )
 
             # Check if the new node pose is a duplicate and skip if it is
             new_node_pose = pose_traj_from_closest_node[-1, :]
@@ -625,8 +634,8 @@ class PathPlanner:
                     existing_pose_traj = self.nodes[closest_node_id].pose_traj_to_children[new_node_id]
                     for i in range(1, existing_pose_traj.shape[0]):
                         self.window.remove_point(existing_pose_traj[i, 0:2], radius=2, update=False)
-                        # self.window.add_point(existing_pose_traj[i, 0:2], radius=2, color=(255, 0, 0), update=False)
-                    self.window.update()
+                    if frequent_viz_update:
+                        self.window.update()
                 self.nodes[closest_node_id].children_ids.remove(new_node_id)
                 del self.nodes[closest_node_id].pose_traj_to_children[new_node_id]
                 
@@ -640,7 +649,8 @@ class PathPlanner:
                 if visualize != 0:
                     for i in range(best_pose_traj.shape[0]):
                         self.window.add_point(best_pose_traj[i, 0:2], radius=2, color=(0, 0, 255), update=False)
-                    self.window.update()
+                    if frequent_viz_update:
+                        self.window.update()
                 
 
             # For all nodes within the ball_radius, try connecting to them from new_node
@@ -656,7 +666,10 @@ class PathPlanner:
                     # cannot connect to new_node due to collision
                     continue
                 
-                potential_cost_to_come = new_node.cost + self.cost_to_come(potential_pose_traj)
+
+                abs_angle_diff = np.abs(potential_pose_traj[-1, 2] - self.nodes[close_node_id].pose[2])
+                rot_dist = min(np.pi * 2 - abs_angle_diff, abs_angle_diff)
+                potential_cost_to_come = new_node.cost + self.cost_to_come(potential_pose_traj) + 10*rot_dist*self.robot_radius
                 if potential_cost_to_come < self.nodes[close_node_id].cost:
                     # remove close_node's parent node's information
                     close_node_parent_id = self.nodes[close_node_id].parent_id
@@ -664,7 +677,8 @@ class PathPlanner:
                         existing_pose_traj = self.nodes[close_node_parent_id].pose_traj_to_children[close_node_id]
                         for i in range(1, existing_pose_traj.shape[0]):
                             self.window.remove_point(existing_pose_traj[i, 0:2], radius=2, update=False)
-                        self.window.update()
+                        if frequent_viz_update:
+                            self.window.update()
                     self.nodes[close_node_parent_id].children_ids.remove(close_node_id)
                     del self.nodes[close_node_parent_id].pose_traj_to_children[close_node_id]
 
@@ -678,9 +692,10 @@ class PathPlanner:
                     if visualize != 0:
                         for i in range(potential_pose_traj.shape[0]):
                             self.window.add_point(potential_pose_traj[i, 0:2], radius=2, color=(0, 0, 255), update=False)
-                        self.window.update()
-            
-            
+                        if frequent_viz_update:
+                            self.window.update()            
+
+
             # Check if goal has been reached
             if np.linalg.norm(new_node_pose[0:2] - self.goal_point) <= self.stopping_dist:
                 self.goal_node_ids.append(new_node_id)
@@ -689,26 +704,39 @@ class PathPlanner:
                     print("SOLUTION FOUND")
                     self.best_goal_node_id = new_node_id
                     self.best_goal_pose_path, self.best_goal_pose_traj = self.recover_path(
-                        self.best_goal_node_id, visualize=visualize
+                        self.best_goal_node_id, visualize=visualize,
                     )
                     self.update_sampling_space()
                     if save_path:
-                        np.save("rrt_star_path.npy", np.array(self.best_goal_pose_path))
+                        # np.save("rrt_star_path.npy", np.array(self.best_goal_pose_path))
+                        np.save("rrt_star_path.npy", self.best_goal_pose_traj[::5, :])
 
             for goal_node_id in self.goal_node_ids:
                 if self.nodes[goal_node_id].cost < self.nodes[self.best_goal_node_id].cost:
                     print("BETTER SOLUTION FOUND")
                     self.best_goal_node_id = goal_node_id
                     if visualize:
+                        # Remove previously found path
                         for i in range(self.best_goal_pose_traj.shape[0]):
                             self.window.remove_point(self.best_goal_pose_traj[i, 0:2], radius=5, update=False)
-                        self.window.update()
+                        if frequent_viz_update:
+                            self.window.update()
                     self.best_goal_pose_path, self.best_goal_pose_traj = self.recover_path(
-                        self.best_goal_node_id, visualize=visualize
+                        self.best_goal_node_id, visualize=visualize,
                     )
                     self.update_sampling_space()
                     if save_path:
-                        np.save("rrt_star_path.npy", np.array(self.best_goal_pose_path))
+                        # np.save("rrt_star_path.npy", np.array(self.best_goal_pose_path))
+                        np.save("rrt_star_path.npy", self.best_goal_pose_traj[::5, :])
+
+            # print(iteration)
+            # re-plot the found path for visualization purposes
+            if visualize and self.best_goal_node_id != -1 and iteration % 10 == 0:
+                for i in range(self.best_goal_pose_traj.shape[0]):
+                    self.window.add_point(self.best_goal_pose_traj[i, 0:2], radius=5, color=(0, 255, 0), update=False)
+                self.window.add_goal_point(update=False)
+
+            self.window.update()
 
         return self.nodes
     
@@ -753,6 +781,7 @@ class PathPlanner:
         if visualize:
             for i in range(trajectory.shape[0]):
                 self.window.add_point(trajectory[i, 0:2], radius=5, color=(0, 255, 0), update=False)
+            self.window.add_goal_point(update=False)
             self.window.update()
         return path, trajectory
 

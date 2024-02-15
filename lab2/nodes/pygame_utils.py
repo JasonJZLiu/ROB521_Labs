@@ -26,6 +26,8 @@ class PygameWindow:
         self.meters_per_pixel = map_settings_dict['resolution'] / self.size[0] * real_map_size_pixels[0]
         self.map_settings_dict = map_settings_dict
         self.origin = np.array(map_settings_dict['origin'])
+        self.stopping_dist = stopping_dist
+        self.goal_point = goal_point
 
         map_img = pygame.image.load('../maps/willowgarageworld_05res.png')
         map_img = pygame.transform.scale(map_img, self.size)
@@ -40,6 +42,11 @@ class PygameWindow:
 
         self.add_se2_pose([0, 0, 0], length=5, color=COLORS['r'])
         self.add_point(goal_point.flatten(), radius=stopping_dist / self.meters_per_pixel, color=COLORS['g'])
+
+    def add_goal_point(self, update=True):
+        self.add_point(
+            self.goal_point.flatten(), radius=self.stopping_dist / self.meters_per_pixel, color=COLORS['g'], update=update
+        )
 
     def add_point(self, map_frame_point, radius=1, width=0, color=COLORS['k'], update=True):
         map_frame_point = map_frame_point.copy()
