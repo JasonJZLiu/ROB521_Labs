@@ -161,10 +161,8 @@ class PathPlanner:
                     [s,  c],
                 ])
                 sample = (w_R_e @ sample_ellipse.reshape(2, 1)).reshape(2,) + center
-                self.window.add_point(sample, radius=5, color=(255, 0, 0), update=True)
+                # self.window.add_point(sample, radius=5, color=(255, 0, 0), update=True)
 
-
-            
         if visualize != 0:
             self.window.add_point(sample, radius=5, color=(255, 0, 0), update=True)
         
@@ -513,7 +511,7 @@ class PathPlanner:
 
 
     #Planner Functions
-    def rrt_planning(self):
+    def rrt_planning(self, save_path=True):
         #This function performs RRT on the given map and robot
         #You do not need to demonstrate this function to the TAs, but it is left in for you to check your work
         while True:
@@ -545,7 +543,13 @@ class PathPlanner:
             # Check if goal has been reached
             if np.linalg.norm(new_node_pose[0:2] - self.goal_point) <= self.stopping_dist:
                 self.best_goal_node_id = new_node_id
+                self.best_goal_pose_path, self.best_goal_pose_traj = self.recover_path(
+                    self.best_goal_node_id, visualize=1
+                )
+                if save_path:
+                    np.save("rrt_path.npy", np.array(self.best_goal_pose_path))
                 break
+
         return self.nodes
     
     def rrt_star_planning(self, visualize=1, max_iteration=40000, save_path=True):
@@ -676,7 +680,7 @@ class PathPlanner:
                             self.window.add_point(potential_pose_traj[i, 0:2], radius=2, color=(0, 0, 255), update=False)
                         self.window.update()
             
-
+            
             # Check if goal has been reached
             if np.linalg.norm(new_node_pose[0:2] - self.goal_point) <= self.stopping_dist:
                 self.goal_node_ids.append(new_node_id)
@@ -704,7 +708,7 @@ class PathPlanner:
                     )
                     self.update_sampling_space()
                     if save_path:
-                        np.save("rrt_star_path.npy", np.array(self.best_goal_pose_path))  
+                        np.save("rrt_star_path.npy", np.array(self.best_goal_pose_path))
 
         return self.nodes
     
