@@ -72,7 +72,8 @@ class PathPlanner:
         self.stopping_dist = stopping_dist #m
         self.best_goal_node_id = -1
         self.goal_node_ids = list()
-        self.best_goal_pose_traj = list()
+        self.best_goal_pose_traj = np.empty((0, 3))
+        self.best_goal_pose_path = list()
 
         #Trajectory Simulation Parameters
         self.timestep = 1.0 #s
@@ -489,21 +490,20 @@ class PathPlanner:
             new_node = Node(
                 pose=new_node_pose,
                 parent_id=closest_node_id,
-                cost=0, 
+                cost=0,
             )
             self.nodes.append(new_node)
             new_node_id = len(self.nodes) - 1
             self.nodes[closest_node_id].children_ids.append(new_node_id)
+            self.nodes[closest_node_id].pose_traj_to_children[new_node_id] = pose_traj
             
             # Check if goal has been reached
             if np.linalg.norm(new_node_pose[0:2] - self.goal_point) <= self.stopping_dist:
-                # self.goal_nodes[len(self.nodes) - 1] = self.nodes[-1]
-                # self.best_goal_node_id = len(self.nodes) - 1
                 self.best_goal_node_id = new_node_id
                 break
         return self.nodes
     
-    def rrt_star_planning(self, visualize=1, max_iteration=40000):
+    def rrt_star_planning(self, visualize=1, max_iteration=40000, save_path=True):
         #This function performs RRT* for the given map and robot
         iteration = 0
         while iteration < max_iteration: 
@@ -635,40 +635,58 @@ class PathPlanner:
             # Check if goal has been reached
             if np.linalg.norm(new_node_pose[0:2] - self.goal_point) <= self.stopping_dist:
                 self.goal_node_ids.append(new_node_id)
-                if (self.best_goal_node_id == -1) or (new_node.cost < self.nodes[self.best_goal_node_id].cost):
+                if (self.best_goal_node_id == -1):
                     self.best_goal_node_id = new_node_id
-                    if visualize:
-                        for pose in self.best_goal_pose_traj:
-                            self.window.remove_point(pose[0:2], radius=5, update=False)
-                        self.window.update()
-                    self.best_goal_pose_traj = self.recover_path(self.best_goal_node_id, visualize=visualize)
+                    self.best_goal_pose_path, self.best_goal_pose_traj = self.recover_path(
+                        self.best_goal_node_id, visualize=visualize
+                    )
+                    if save_path:
+                        np.save("rrt_star_path.npy", np.array(self.best_goal_pose_path))
 
+                   
             for goal_node_id in self.goal_node_ids:
                 if self.nodes[goal_node_id].cost < self.nodes[self.best_goal_node_id].cost:
+                    print("BETTER PATH FOUND")
                     self.best_goal_node_id = goal_node_id
                     if visualize:
-                        for pose in self.best_goal_pose_traj:
-                            self.window.remove_point(pose[0:2], radius=5, update=False)
+                        for i in range(self.best_goal_pose_traj.shape[0]):
+                            self.window.remove_point(self.best_goal_pose_traj[i, 0:2], radius=5, update=False)
                         self.window.update()
-                    self.best_goal_pose_traj = self.recover_path(self.best_goal_node_id, visualize=visualize)
+                    self.best_goal_pose_path, self.best_goal_pose_traj = self.recover_path(
+                        self.best_goal_node_id, visualize=visualize
+                    )
+                    if save_path:
+                        np.save("rrt_star_path.npy", np.array(self.best_goal_pose_path))
                 
         return self.nodes
+            
     
 
 
     def recover_path(self, node_id=-1, visualize=0):
         path = [self.nodes[node_id].pose]
+        node_id_path = [node_id]
+
         current_node_id = self.nodes[node_id].parent_id
         while current_node_id > -1:
             path.append(self.nodes[current_node_id].pose)
+            node_id_path.append(current_node_id)
             current_node_id = self.nodes[current_node_id].parent_id
         path.reverse()
+        node_id_path.reverse()
 
+
+        trajectory = np.empty((0, 3))
+        for i in range(len(node_id_path)-1):
+            curr_node_id = node_id_path[i]
+            next_node_id = node_id_path[i+1]
+            trajectory = np.vstack((trajectory, self.nodes[curr_node_id].pose_traj_to_children[next_node_id]))
+        
         if visualize:
-            for pose in path:
-                self.window.add_point(pose[0:2], radius=5, color=(0, 255, 0), update=True)
-                # self.window.add_se2_pose(pose, length=5, color=(0, 255, 0), update=True)
-        return path
+            for i in range(trajectory.shape[0]):
+                self.window.add_point(trajectory[i, 0:2], radius=5, color=(0, 255, 0), update=False)
+            self.window.update()
+        return path, trajectory
 
 
 def main():
@@ -678,6 +696,8 @@ def main():
 
     #robot information
     goal_point = np.array([10.0, 10.0]) #m
+    # goal_point = np.array([-10.0, 0.0]) #m
+
     # goal_point = np.array([20.0, -30.0]) #m
 
     stopping_dist = 0.5 #m
@@ -687,7 +707,8 @@ def main():
 
     nodes = path_planner.rrt_star_planning()
     # nodes = path_planner.rrt_planning()
-    node_path_metric = np.array(path_planner.recover_path(visualize=1))
+    node_path_metric, _ = path_planner.recover_path(node_id=path_planner.best_goal_node_id, visualize=1)
+    node_path_metric = np.array(node_path_metric)
 
     # #Leftover test functions
     # np.save("rrt_path.npy", node_path_metric)
