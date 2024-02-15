@@ -34,6 +34,7 @@ class Node:
         self.parent_id = parent_id # The parent node id that leads to this node (There should only ever be one parent in RRT)
         self.cost = cost # The cost to come to this node
         self.children_ids = [] # The children node ids of this node
+        self.pose_traj_to_children = dict() # Maps node_id of children to a a trajectory array of shape (N, 3)
         return
 
 #Path Planner 
@@ -113,13 +114,13 @@ class PathPlanner:
         return sample
           
     
-    def check_if_duplicate(self, point):
+    def check_if_duplicate(self, pose):
         #Check if point is a duplicate of an already existing node
-        # point: (3,)
+        # pose: (3,)
 
         # constructing a KDTree with the full pose (x, y, theta)
         nodes_KDTree = cKDTree([node.pose for node in self.nodes])
-        distance, node_idx = nodes_KDTree.query(point)
+        distance, node_idx = nodes_KDTree.query(pose)
         if np.isclose(distance, 0.0):
             return True
         else:
@@ -355,6 +356,11 @@ class PathPlanner:
             pose_s = np.array([x_w_f, y_w_f, theta_0])
             pose_traj = np.linspace(pose_i, pose_s, self.num_substeps)[None, ...]
         else:
+            # in robot's frame, define a circle that passes through
+            # the robot's current position (0, 0) to the point_f in
+            # robot's frame. The circle must also have a slope of 0
+            # at (0, 0) to match the robot's current heading, causing
+            # the circle's center to lie on the y-axis of robot's frame
             traj_radius = (x_r_f**2 + y_r_f**2) / (2*y_r_f)
             traj_center_robot_frame = np.array([0.0, traj_radius, 1]).T
             traj_center = (w_T_r @ traj_center_robot_frame).reshape(3,)[0:2]
@@ -434,6 +440,7 @@ class PathPlanner:
     
     def cost_to_come(self, trajectory_o):
         #The cost to get to a node from lavalle 
+        # trajectory_o: (N, 3) 
         cost_to_come = np.linalg.norm(trajectory_o[1:, 0:2] - trajectory_o[0:-1, 0:2], axis=1).sum()
         return cost_to_come
 
@@ -441,22 +448,19 @@ class PathPlanner:
     def update_children(self, node_id):
         #Given a node_id with a changed cost, update all connected nodes with the new cost
         parent_node = self.nodes[node_id]
-        children_ids = node.children_ids
-        for child_id in children_ids:
-            #traj = self.connect_node_to_point(node.point, self.nodes[child].point)
-            # TODO: IMPLEMENT traj_to_children (this is needed to calculate the exact arclength)
-            traj = parent_node.traj_to_children[child_id]
-            # assert not np.any(np.isnan(traj))
-            self.nodes[child_id].cost = parent_node.cost + self.cost_to_come(traj)
+        for child_id in parent_node.children_ids:
+            # (N, 3)
+            pose_traj_to_children = parent_node.pose_traj_to_children[child_id]
+            edge_cost = self.cost_to_come(pose_traj_to_children)
+            self.nodes[child_id].cost = parent_node.cost + edge_cost
             self.update_children(child_id)
-        
-    
+
 
     #Planner Functions
     def rrt_planning(self):
         #This function performs RRT on the given map and robot
         #You do not need to demonstrate this function to the TAs, but it is left in for you to check your work
-        while True: #Most likely need more iterations than this to complete the map!
+        while True:
             # Sample map space
             point = self.sample_map_space(visualize=0)
 
@@ -491,27 +495,40 @@ class PathPlanner:
     
     def rrt_star_planning(self):
         #This function performs RRT* for the given map and robot        
-        for i in range(1): #Most likely need more iterations than this to complete the map!
-            #Sample
-            point = self.sample_map_space()
+        while True: 
+            # Sample map space
+            point = self.sample_map_space(visualize=0)
 
-            #Closest Node
-            closest_node_id = self.closest_node(point)
+            # Get the closest point
+            closest_node_id = self.closest_nodes(point, k=1)
 
-            #Simulate trajectory
-            trajectory_o = self.simulate_trajectory(self.nodes[closest_node_id].pose, point)
+            # Simulate driving the robot towards the closest point
+            pose_traj = self.simulate_trajectory(self.nodes[closest_node_id], point, visualize=1)
 
-            #Check for Collision
-            print("TO DO: Check for collision.")
+            # Check if the new node pose is a duplicate and skip if it is
+            new_node_pose = pose_traj[-1, :]
+            if self.check_if_duplicate(new_node_pose):
+                continue
 
-            #Last node rewire
-            print("TO DO: Last node rewiring")
+            # Compute the cost-to-come of the new node
+            new_node_cost_to_come = self.nodes[closest_node_id].cost + self.cost_to_come[pose_traj]
 
-            #Close node rewire
-            print("TO DO: Near point rewiring")
+            # Add the last pose in the trajectory as a Node and update closest node's children            
+            new_node = Node(
+                pose=new_node_pose,
+                parent_id=closest_node_id,
+                cost=new_node_cost_to_come, 
+            )
+            self.nodes.append(new_node)
+            new_node_id = len(self.nodes) - 1
+            self.nodes[closest_node_id].children_ids.append(new_node_id)
+            self.nodes[closest_node_id].pose_traj_to_children[new_node_id] = pose_traj
 
-            #Check for early end
-            print("TO DO: Check for early end")
+            
+
+
+
+
         return self.nodes
     
     def recover_path(self, node_id=-1, visualize=0):
@@ -543,12 +560,12 @@ def main():
     #RRT precursor
     path_planner = PathPlanner(map_filename, map_setings_filename, goal_point, stopping_dist)
 
-    # nodes = path_planner.rrt_star_planning()
-    nodes = path_planner.rrt_planning()
+    nodes = path_planner.rrt_star_planning()
+    # nodes = path_planner.rrt_planning()
     node_path_metric = np.array(path_planner.recover_path(visualize=1))
 
-    #Leftover test functions
-    np.save("rrt_path.npy", node_path_metric)
+    # #Leftover test functions
+    # np.save("rrt_path.npy", node_path_metric)
     input("")
 
 
