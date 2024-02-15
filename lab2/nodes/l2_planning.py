@@ -70,7 +70,9 @@ class PathPlanner:
         #Goal Parameters
         self.goal_point = goal_point #m
         self.stopping_dist = stopping_dist #m
-        self.goal_node_id = -1
+        self.best_goal_node_id = -1
+        self.goal_node_ids = list()
+        self.best_goal_pose_traj = list()
 
         #Trajectory Simulation Parameters
         self.timestep = 1.0 #s
@@ -125,6 +127,14 @@ class PathPlanner:
             return True
         else:
             return False
+
+        # # constructing a KDTree with the full pose (x, y, theta)
+        # nodes_KDTree = cKDTree([node.pose[0:2] for node in self.nodes])
+        # distance, node_idx = nodes_KDTree.query(pose[0:2])
+        # if np.isclose(distance, 0.0):
+        #     return True
+        # else:
+        #     return False
 
     
     def closest_nodes(self, point, k=1):
@@ -489,15 +499,17 @@ class PathPlanner:
             if np.linalg.norm(new_node_pose[0:2] - self.goal_point) <= self.stopping_dist:
                 # self.goal_nodes[len(self.nodes) - 1] = self.nodes[-1]
                 # self.best_goal_node_id = len(self.nodes) - 1
-                self.goal_node_id = new_node_id
+                self.best_goal_node_id = new_node_id
                 break
         return self.nodes
     
     def rrt_star_planning(self, visualize=1, max_iteration=40000):
         #This function performs RRT* for the given map and robot
         iteration = 0
-        while True: 
+        while iteration < max_iteration: 
             iteration += 1
+            # print(iteration)
+
             # Sample map space
             point = self.sample_map_space(visualize=0)
 
@@ -526,13 +538,14 @@ class PathPlanner:
             self.nodes[closest_node_id].children_ids.append(new_node_id)
             self.nodes[closest_node_id].pose_traj_to_children[new_node_id] = pose_traj_from_closest_node
 
+
             # Query the KDTree for all node ids within the ball_radius
             nodes_KDTree = cKDTree([node.pose[0:2] for node in self.nodes])
             close_node_ids = nodes_KDTree.query_ball_point(new_node_pose[0:2], self.ball_radius())
             # Remove the new_node id in close_node_indices
             close_node_ids.remove(new_node_id)
 
-            
+            # Find the best node within the ball_radius to connect to new_node
             best_node_id = None
             best_cost_to_come = new_node.cost
             best_pose_traj = None
@@ -553,7 +566,7 @@ class PathPlanner:
                     best_node_id = close_node_id
                     best_pose_traj = potential_pose_traj
             
-
+            # Re-wire connection to new_node from nodes within the ball_radius
             if best_node_id is not None:
                 # there exists a node that yields a lower cost-to-come than the currently wired node
                 # hence needs re-wiring
@@ -570,7 +583,7 @@ class PathPlanner:
                 
                 # re-wire to connect from best_node
                 new_node.pose = best_pose_traj[-1]
-                new_node.parent = best_node_id
+                new_node.parent_id = best_node_id
                 new_node.cost = best_cost_to_come
                 self.nodes[best_node_id].children_ids.append(new_node_id)
                 self.nodes[best_node_id].pose_traj_to_children[new_node_id] = best_pose_traj
@@ -580,45 +593,69 @@ class PathPlanner:
                         self.window.add_point(best_pose_traj[i, 0:2], radius=2, color=(0, 0, 255), update=False)
                     self.window.update()
                 
-              
+
+            # For all nodes within the ball_radius (except for best_id), try connecting to them from new_node
+            # and see if it can improve the rest of the paths
+            for close_node_id in close_node_ids:
+                # compute the potential connection between new_node to a close_node
+                potential_pose_traj, last_valid_substep, last_valid_pose = self.connect_node_to_point(
+                    new_node, self.nodes[close_node_id].pose[0:2], visualize=0
+                )
+
+                # reject path with collisions
+                if last_valid_substep != (potential_pose_traj.shape[0]-1):
+                    # cannot connect to new_node due to collision
+                    continue
                 
-            # if iteration == 40:
-            #     print(self.nodes[1].pose)
-            #     print(self.nodes[1].pose_traj_to_children)
-            #     input("")
-    
-            # print(best_node_id)
-            # input("")
+                potential_cost_to_come = new_node.cost + self.cost_to_come(potential_pose_traj)
+                if potential_cost_to_come < self.nodes[close_node_id].cost:
+                    # remove close_node's parent node's information
+                    close_node_parent_id = self.nodes[close_node_id].parent_id
+                    if visualize != 0:
+                        existing_pose_traj = self.nodes[close_node_parent_id].pose_traj_to_children[close_node_id]
+                        for i in range(1, existing_pose_traj.shape[0]):
+                            self.window.remove_point(existing_pose_traj[i, 0:2], radius=2, update=False)
+                        self.window.update()
+                    self.nodes[close_node_parent_id].children_ids.remove(close_node_id)
+                    del self.nodes[close_node_parent_id].pose_traj_to_children[close_node_id]
 
-                
-            # if visualize != 0:
-            #     for i in range(pose_traj_from_closest_node.shape[0]):
-            #         self.window.add_point(pose_traj_from_closest_node[i, 0:2], radius=2, color=(0, 0, 255), update=False)
-            #     self.window.update()
+                    # re-wire from new_node to close_node
+                    self.nodes[close_node_id].parent_id = new_node_id
+                    self.nodes[close_node_id].cost = potential_cost_to_come
+                    new_node.children_ids.append(close_node_id)
+                    new_node.pose_traj_to_children[close_node_id] = potential_pose_traj
+                    self.update_children(close_node_id)
 
-                
-
-
-            # nodes_KDTree = cKDTree([node.pose[0:2] for node in self.nodes])
-            # # close_node_indices = nodes_KDTree.query_ball_point(new_node.pose[0:2], self.ball_radius())
-            # close_node_indices = nodes_KDTree.query_ball_point(new_node.pose[0:2], 0.0001)
-
-            # print(self.ball_radius())
-            # print(type(close_node_indices))
-            # input("")
-
+                    if visualize != 0:
+                        for i in range(potential_pose_traj.shape[0]):
+                            self.window.add_point(potential_pose_traj[i, 0:2], radius=2, color=(0, 0, 255), update=False)
+                        self.window.update()
             
 
+            # Check if goal has been reached
+            if np.linalg.norm(new_node_pose[0:2] - self.goal_point) <= self.stopping_dist:
+                self.goal_node_ids.append(new_node_id)
+                if (self.best_goal_node_id == -1) or (new_node.cost < self.nodes[self.best_goal_node_id].cost):
+                    self.best_goal_node_id = new_node_id
+                    if visualize:
+                        for pose in self.best_goal_pose_traj:
+                            self.window.remove_point(pose[0:2], radius=5, update=False)
+                        self.window.update()
+                    self.best_goal_pose_traj = self.recover_path(self.best_goal_node_id, visualize=visualize)
 
-            # Check if new_node's neighoring circle region has any other nodes
-            # If so, compute the edge cost from each of those neighbors to the new node + their original cost
-            # Pick the lowest one. If the lowest cost to come is lower than new_node's current cost, rewire
-            #   In new_node's parent node, get rid of new node id as a child
-            
-
-
+            for goal_node_id in self.goal_node_ids:
+                if self.nodes[goal_node_id].cost < self.nodes[self.best_goal_node_id].cost:
+                    self.best_goal_node_id = goal_node_id
+                    if visualize:
+                        for pose in self.best_goal_pose_traj:
+                            self.window.remove_point(pose[0:2], radius=5, update=False)
+                        self.window.update()
+                    self.best_goal_pose_traj = self.recover_path(self.best_goal_node_id, visualize=visualize)
+                
         return self.nodes
     
+
+
     def recover_path(self, node_id=-1, visualize=0):
         path = [self.nodes[node_id].pose]
         current_node_id = self.nodes[node_id].parent_id
@@ -630,7 +667,7 @@ class PathPlanner:
         if visualize:
             for pose in path:
                 self.window.add_point(pose[0:2], radius=5, color=(0, 255, 0), update=True)
-                self.window.add_se2_pose(pose, length=5, color=(0, 255, 0), update=True)
+                # self.window.add_se2_pose(pose, length=5, color=(0, 255, 0), update=True)
         return path
 
 
