@@ -82,6 +82,9 @@ class PathPlanner:
         #Planning storage
         self.nodes = [Node(np.zeros((3,)), -1, 0)]
 
+        #Sampling Parameters
+        self.sampling_space_params = dict()
+
         #RRT* Specific Parameters
         self.lebesgue_free = np.sum(self.occupancy_map) * self.map_settings_dict["resolution"] **2
         self.zeta_d = np.pi
@@ -90,7 +93,6 @@ class PathPlanner:
         self.epsilon = 2.5
         
         #Pygame window for visualization
-        # (1000, 1000)
         # self.window = pygame_utils.PygameWindow(
         #     "Path Planner", (2500, 2500), self.occupancy_map.shape, self.map_settings_dict, self.goal_point, self.stopping_dist)
         self.window = pygame_utils.PygameWindow(
@@ -101,16 +103,39 @@ class PathPlanner:
 
     #Functions required for RRT
     def sample_map_space(self, visualize=0):
-        #Return an [x,y] coordinate to drive the robot towards (1, 2)
+        #Return an [x,y] coordinate to drive the robot towards
 
-        sample_goal_prob = np.random.rand()
-        if sample_goal_prob < 0.06:
-            # samples the goal position
-            sample = self.goal_point
+        if self.best_goal_node_id == -1:
+            # a path has not been found yet
+            sample_goal_prob = np.random.rand()
+            if sample_goal_prob < 0.06:
+                # samples the goal position
+                # sample = self.goal_point
+                delta = 4*self.stopping_dist * np.random.randn(2,)
+                sample = self.goal_point + delta
+            else:
+                sample = (self.bounds[1] - self.bounds[0])*np.random.rand(2) + self.bounds[0]
+                sample = sample.reshape(2,)
         else:
-            sample = (self.bounds[1] - self.bounds[0])*np.random.rand(2) + self.bounds[0]
-            sample = sample.reshape(2,)
-        
+            # perform informed RRT* sampling
+
+            sample_goal_prob = np.random.rand()
+            if sample_goal_prob < 0.06:
+                # samples the goal position
+                # sample = self.goal_point
+                delta = self.stopping_dist * np.random.randn(2,)
+                sample = self.goal_point + delta
+            else: 
+                a = self.sampling_space_params["a"]
+                center = self.sampling_space_params["center"]
+
+                angle = np.random.uniform(0, 2*np.pi)
+                r = a * np.sqrt(np.random.uniform(0, 1))
+                x = center[0] + r * np.cos(angle)
+                y = center[1] + r * np.sin(angle)
+                sample = np.array([x, y])
+
+
         if visualize != 0:
             self.window.add_point(sample, radius=5, color=(255, 0, 0), update=True)
         
@@ -506,7 +531,7 @@ class PathPlanner:
     def rrt_star_planning(self, visualize=1, max_iteration=40000, save_path=True):
         #This function performs RRT* for the given map and robot
         iteration = 0
-        while iteration < max_iteration: 
+        while True:
             iteration += 1
             # print(iteration)
 
@@ -594,8 +619,8 @@ class PathPlanner:
                     self.window.update()
                 
 
-            # For all nodes within the ball_radius (except for best_id), try connecting to them from new_node
-            # and see if it can improve the rest of the paths
+            # For all nodes within the ball_radius, try connecting to them from new_node
+            # and see if the path including new_node yields a lower cost-to-come
             for close_node_id in close_node_ids:
                 # compute the potential connection between new_node to a close_node
                 potential_pose_traj, last_valid_substep, last_valid_pose = self.connect_node_to_point(
@@ -636,17 +661,19 @@ class PathPlanner:
             if np.linalg.norm(new_node_pose[0:2] - self.goal_point) <= self.stopping_dist:
                 self.goal_node_ids.append(new_node_id)
                 if (self.best_goal_node_id == -1):
+                    # setting self.best_goal_node_id for the first time
+                    print("SOLUTION FOUND")
                     self.best_goal_node_id = new_node_id
                     self.best_goal_pose_path, self.best_goal_pose_traj = self.recover_path(
                         self.best_goal_node_id, visualize=visualize
                     )
+                    self.update_sampling_space()
                     if save_path:
                         np.save("rrt_star_path.npy", np.array(self.best_goal_pose_path))
 
-                   
             for goal_node_id in self.goal_node_ids:
                 if self.nodes[goal_node_id].cost < self.nodes[self.best_goal_node_id].cost:
-                    print("BETTER PATH FOUND")
+                    print("BETTER SOLUTION FOUND")
                     self.best_goal_node_id = goal_node_id
                     if visualize:
                         for i in range(self.best_goal_pose_traj.shape[0]):
@@ -655,13 +682,25 @@ class PathPlanner:
                     self.best_goal_pose_path, self.best_goal_pose_traj = self.recover_path(
                         self.best_goal_node_id, visualize=visualize
                     )
+                    self.update_sampling_space()
                     if save_path:
-                        np.save("rrt_star_path.npy", np.array(self.best_goal_pose_path))
-                
+                        np.save("rrt_star_path.npy", np.array(self.best_goal_pose_path))  
+
         return self.nodes
-            
     
 
+    def update_sampling_space(self):
+        # take self.best_goal_pose_traj and pass it through cost to come
+        trajectory_length = self.cost_to_come(self.best_goal_pose_traj)
+        a = trajectory_length / 2
+
+        center = (self.best_goal_pose_traj[0, 0:2] + self.best_goal_pose_traj[-1, 0:2]) / 2
+        self.sampling_space_params["a"] = a
+        self.sampling_space_params["center"] = center
+
+
+
+            
 
     def recover_path(self, node_id=-1, visualize=0):
         path = [self.nodes[node_id].pose]
@@ -674,7 +713,6 @@ class PathPlanner:
             current_node_id = self.nodes[current_node_id].parent_id
         path.reverse()
         node_id_path.reverse()
-
 
         trajectory = np.empty((0, 3))
         for i in range(len(node_id_path)-1):
@@ -698,97 +736,13 @@ def main():
     goal_point = np.array([10.0, 10.0]) #m
     # goal_point = np.array([-10.0, 0.0]) #m
 
-    # goal_point = np.array([20.0, -30.0]) #m
-
     stopping_dist = 0.5 #m
 
-    #RRT precursor
     path_planner = PathPlanner(map_filename, map_setings_filename, goal_point, stopping_dist)
-
-    nodes = path_planner.rrt_star_planning()
     # nodes = path_planner.rrt_planning()
-    node_path_metric, _ = path_planner.recover_path(node_id=path_planner.best_goal_node_id, visualize=1)
-    node_path_metric = np.array(node_path_metric)
-
-    # #Leftover test functions
-    # np.save("rrt_path.npy", node_path_metric)
+    nodes = path_planner.rrt_star_planning()
+    
     input("")
-
-
-
-    # ------- TEST -------
-    # from PIL import Image
-    # map_image = Image.open("../maps/"+map_filename).convert('RGB')
-    # map_pixels = map_image.load()
-
-    # points = np.array([[0.0, 0.0], [300, -10.0]])
-
-    # # (num_pts, num_pts_per_circle, 2)
-    # point_circle_coords = path_planner.points_to_robot_circle(points)
-
-    # # testing points_to_robot_circle
-    # for i in range(point_circle_coords.shape[0]):
-    #     for j in range(point_circle_coords.shape[1]):
-    #         px_coor = point_circle_coords[i, j]
-    #         px_coor = (px_coor[0], px_coor[1])
-    #         map_pixels[px_coor] = (255, 0, 0)
-
-    
-    # # testing trajectory_rollout
-    # vel = np.array([1.0, 1, 1]).reshape(-1, 1)
-    # rot_vel = np.array([1.5, 0.0, -1.5]).reshape(-1, 1)
-    # x_y_theta = np.array([0.0, 0.0, 0.])#.reshape(3, 1)
-    # res, ind, last_points = path_planner.trajectory_rollout(
-    #     vel, rot_vel, x_y_theta, 1*2, 10*2
-    # )
-    # for i in range(res.shape[0]):
-    #     res_1 = res[i, :, 0:2]
-    #     point_circle_coords = path_planner.point_to_cell(res_1)
-    #     for j in range(point_circle_coords.shape[0]):
-    #         px_coor = point_circle_coords[j]
-    #         px_coor = (px_coor[0], px_coor[1])
-    #         map_pixels[px_coor] = (255, 0, 0)
-
-    # last_points_px = path_planner.point_to_cell(last_points)
-    # for i in range(last_points.shape[0]):
-    #     px_coor = last_points_px[i]
-    #     point_circle_coords = path_planner.point_to_cell(res_1)
-    #     px_coor = (px_coor[0], px_coor[1])
-    #     map_pixels[px_coor] = (0, 255, 0)
-    # map_image.show()
-
-    # # testing robot_controller
-    # sampled_point = np.array([2, 0.6])
-    # path_planner.window.add_point(sampled_point, radius=3)
-    # node_0 = Node(pose=np.array([0, 0, 0.5]), parent_id=-1, cost=0)
-    # path_planner.window.add_se2_pose(node_0.pose, length=10)
-    # path_planner.robot_controller(node_0, sampled_point, visualize=2)
-
-    # # test rrt_plan
-    # path_planner.rrt_planning()
-
-    # path = path_planner.recover_path(path_planner.goal_node_id, visualize=1)
-    # input("")
-    
-    # # test connect_node_to_point
-    # node_i = Node(
-    #     pose=np.array([10, 10, 0.1]),
-    #     parent_id=-1,
-    #     cost=0,
-    # )
-
-    # # point_f = np.array([11, 12.])
-    # # point_f = np.array([9, 12.])
-    # # point_f = np.array([11, 8])
-    # # point_f = np.array([9, 8])
-
-    # point_f = np.array([10, 5.])
-    # path_planner.window.add_point(point_f, radius=5, color=(0, 255, 0))
-    # path_planner.connect_node_to_point(node_i, point_f, visualize=1)
-    # input("")
-
-    
-
 
 
 if __name__ == '__main__':
