@@ -64,7 +64,7 @@ class PathPlanner:
         # self.vel_max = 0.26 #m/s (Feel free to change!)
         # self.rot_vel_max = 1.82 #0.2 #rad/s (Feel free to change!)
 
-        self.vel_max = 1 #m/s (Feel free to change!)
+        self.vel_max = 0.26 #m/s (Feel free to change!)
         self.rot_vel_max = 1.82 #0.2 #rad/s (Feel free to change!)
 
         #Goal Parameters
@@ -76,11 +76,11 @@ class PathPlanner:
         self.best_goal_pose_path = list()
 
         #Trajectory Simulation Parameters
-        self.timestep = 1.0 #s
+        self.timestep = 2.0 #s
         self.num_substeps = 20 #10
 
         #Trajectory Rollout Options
-        vel_grid_res = 7 #4 
+        vel_grid_res = 3 #7 #4 
         rot_vel_res = 9 #7
         num_vel = vel_grid_res*rot_vel_res
 
@@ -116,7 +116,7 @@ class PathPlanner:
         # self.window = pygame_utils.PygameWindow(
         #     "Path Planner", (2500, 2500), self.occupancy_map.shape, self.map_settings_dict, self.goal_point, self.stopping_dist)
         self.window = pygame_utils.PygameWindow(
-            "Path Planner", (3000, 3000), self.occupancy_map.shape, self.map_settings_dict, self.goal_point, self.stopping_dist)
+            "Path Planner", (1500, 1500), self.occupancy_map.shape, self.map_settings_dict, self.goal_point, self.stopping_dist)
         return
 
 
@@ -792,8 +792,8 @@ def main():
     map_setings_filename = "willowgarageworld_05res.yaml"
 
     #robot information
+    goal_point = np.array([42.0, -44.0]) #m
     goal_point = np.array([10.0, 10.0]) #m
-    # goal_point = np.array([-10.0, 0.0]) #m
 
     stopping_dist = 0.5 #m
 
