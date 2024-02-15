@@ -143,13 +143,27 @@ class PathPlanner:
             else:
                 # perform informed RRT* sampling
                 a = self.sampling_space_params["a"]
+                b = self.sampling_space_params["b"]
                 center = self.sampling_space_params["center"]
+                ellipse_theta = self.sampling_space_params["ellipse_theta"]
 
+                # sample a random point in the ellipse's frame
+                # frame origin: ellipse center | orientation: C_3(ellipse_theta)
                 angle = np.random.uniform(0, 2*np.pi)
-                r = a * np.sqrt(np.random.uniform(0, 1))
-                x = center[0] + r * np.cos(angle)
-                y = center[1] + r * np.sin(angle)
-                sample = np.array([x, y])
+                r = np.sqrt(np.random.uniform(0, 1))
+                x = a*r * np.cos(angle)
+                y = b*r * np.sin(angle)
+                sample_ellipse = np.array([x, y])
+
+                c, s = np.cos(ellipse_theta), np.sin(ellipse_theta)
+                w_R_e = np.array([
+                    [c, -s],
+                    [s,  c],
+                ])
+                sample = (w_R_e @ sample_ellipse.reshape(2, 1)).reshape(2,) + center
+                self.window.add_point(sample, radius=5, color=(255, 0, 0), update=True)
+
+
             
         if visualize != 0:
             self.window.add_point(sample, radius=5, color=(255, 0, 0), update=True)
@@ -698,11 +712,19 @@ class PathPlanner:
     def update_sampling_space(self):
         # take self.best_goal_pose_traj and pass it through cost to come
         trajectory_length = self.cost_to_come(self.best_goal_pose_traj)
+        start_to_goal_vec = self.best_goal_pose_traj[-1, 0:2] - self.best_goal_pose_traj[0, 0:2]
+
         a = trajectory_length / 2
+        c = np.linalg.norm(start_to_goal_vec)/2
+        b = np.sqrt(a**2 - c**2)
 
         center = (self.best_goal_pose_traj[0, 0:2] + self.best_goal_pose_traj[-1, 0:2]) / 2
+        ellipse_theta = np.arctan2(start_to_goal_vec[1], start_to_goal_vec[0])
+
         self.sampling_space_params["a"] = a
+        self.sampling_space_params["b"] = b
         self.sampling_space_params["center"] = center
+        self.sampling_space_params["ellipse_theta"] = ellipse_theta
         self.sampling_space_params["goal_range_multiplier"] = 1
 
 
