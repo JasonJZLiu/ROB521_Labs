@@ -76,11 +76,11 @@ class PathPlanner:
         self.best_goal_pose_path = list()
 
         #Trajectory Simulation Parameters
-        self.timestep = 2.0 #s
+        self.timestep = 3.0 #s
         self.num_substeps = 20 #10
 
         #Trajectory Rollout Options
-        vel_grid_res = 3 #7 #4 
+        vel_grid_res = 7 #7 #4 
         rot_vel_res = 9 #7
         num_vel = vel_grid_res*rot_vel_res
 
@@ -115,8 +115,9 @@ class PathPlanner:
         #Pygame window for visualization
         # self.window = pygame_utils.PygameWindow(
         #     "Path Planner", (2500, 2500), self.occupancy_map.shape, self.map_settings_dict, self.goal_point, self.stopping_dist)
+        real_map_size_pixels = [self.occupancy_map.shape[1], self.occupancy_map.shape[0]]
         self.window = pygame_utils.PygameWindow(
-            "Path Planner", (1500, 1500), self.occupancy_map.shape, self.map_settings_dict, self.goal_point, self.stopping_dist)
+            "Path Planner", (1900, 1900), real_map_size_pixels, self.map_settings_dict, self.goal_point, self.stopping_dist)
         return
 
 
@@ -126,7 +127,7 @@ class PathPlanner:
         #Return an [x,y] coordinate to drive the robot towards
 
         sample_goal_range_prob = np.random.rand()
-        if sample_goal_range_prob < 0.06:
+        if sample_goal_range_prob < 0.03: # 0.06
             # samples the goal position
             sample_goal_prob = np.random.rand()
             if sample_goal_prob < 0.5:
@@ -161,10 +162,10 @@ class PathPlanner:
                     [s,  c],
                 ])
                 sample = (w_R_e @ sample_ellipse.reshape(2, 1)).reshape(2,) + center
-                # self.window.add_point(sample, radius=5, color=(255, 0, 0), update=True)
+                # self.window.add_point(sample, radius=3, color=(255, 0, 0), update=True)
 
         if visualize != 0:
-            self.window.add_point(sample, radius=5, color=(255, 0, 0), update=True)
+            self.window.add_point(sample, radius=3, color=(255, 0, 0), update=True)
         
         return sample
           
@@ -180,14 +181,6 @@ class PathPlanner:
             return True
         else:
             return False
-
-        # # constructing a KDTree with the full pose (x, y, theta)
-        # nodes_KDTree = cKDTree([node.pose[0:2] for node in self.nodes])
-        # distance, node_idx = nodes_KDTree.query(pose[0:2])
-        # if np.isclose(distance, 0.0):
-        #     return True
-        # else:
-        #     return False
 
     
     def closest_nodes(self, point, k=1):
@@ -252,13 +245,13 @@ class PathPlanner:
                 for i in range(pose_traj.shape[0]):
                     for j in range(pose_traj.shape[1]):
                         if not np.all(np.isnan(pose_traj[i, j]) == np.isnan(np.array([np.nan, np.nan, np.nan]))):
-                            self.window.add_point(pose_traj[i, j, 0:2], radius=2, color=(255, 0, 0), update=False)
+                            self.window.add_point(pose_traj[i, j, 0:2], radius=1, color=(255, 0, 0), update=False)
                 # draw all end points
                 for i in range(last_valid_poses.shape[0]):
-                    self.window.add_point(last_valid_poses[i, 0:2], radius=2, color=(0, 255, 0), update=False)
+                    self.window.add_point(last_valid_poses[i, 0:2], radius=1, color=(0, 255, 0), update=False)
             # draw best path
             for i in range(best_traj.shape[0]):
-                self.window.add_point(best_traj[i, 0:2], radius=2, color=(0, 0, 255), update=False)
+                self.window.add_point(best_traj[i, 0:2], radius=1, color=(0, 0, 255), update=False)
             if frequent_viz_update:
                 self.window.update()
 
@@ -368,7 +361,7 @@ class PathPlanner:
         # (num_points, num_px_per_circle, 2)
         circle_points = pixel_coords[:, np.newaxis, :] + circle_px_coords
         # clip any pixel coords outside of the range to within the range
-        circle_points = np.clip(circle_points, a_min=[0, 0], a_max=[self.map_shape[0]-1, self.map_shape[1]-1])
+        circle_points = np.clip(circle_points, a_min=[0, 0], a_max=[self.map_shape[1]-1, self.map_shape[0]-1])
         return circle_points
 
 
@@ -419,7 +412,7 @@ class PathPlanner:
             traj_radius = (x_r_f**2 + y_r_f**2) / (2*y_r_f)
             traj_center_robot_frame = np.array([0.0, traj_radius, 1]).T
             traj_center = (w_T_r @ traj_center_robot_frame).reshape(3,)[0:2]
-            # self.window.add_point(traj_center, radius=5)
+            # self.window.add_point(traj_center, radius=3)
 
             # calculate the linear and angular velocities to achieve traj_radius
             rot_vel = self.rot_vel_max
@@ -633,7 +626,7 @@ class PathPlanner:
                 if visualize != 0:
                     existing_pose_traj = self.nodes[closest_node_id].pose_traj_to_children[new_node_id]
                     for i in range(1, existing_pose_traj.shape[0]):
-                        self.window.remove_point(existing_pose_traj[i, 0:2], radius=2, update=False)
+                        self.window.remove_point(existing_pose_traj[i, 0:2], radius=1, update=False)
                     if frequent_viz_update:
                         self.window.update()
                 self.nodes[closest_node_id].children_ids.remove(new_node_id)
@@ -648,7 +641,7 @@ class PathPlanner:
 
                 if visualize != 0:
                     for i in range(best_pose_traj.shape[0]):
-                        self.window.add_point(best_pose_traj[i, 0:2], radius=2, color=(0, 0, 255), update=False)
+                        self.window.add_point(best_pose_traj[i, 0:2], radius=1, color=(0, 0, 255), update=False)
                     if frequent_viz_update:
                         self.window.update()
                 
@@ -676,7 +669,7 @@ class PathPlanner:
                     if visualize != 0:
                         existing_pose_traj = self.nodes[close_node_parent_id].pose_traj_to_children[close_node_id]
                         for i in range(1, existing_pose_traj.shape[0]):
-                            self.window.remove_point(existing_pose_traj[i, 0:2], radius=2, update=False)
+                            self.window.remove_point(existing_pose_traj[i, 0:2], radius=1, update=False)
                         if frequent_viz_update:
                             self.window.update()
                     self.nodes[close_node_parent_id].children_ids.remove(close_node_id)
@@ -691,7 +684,7 @@ class PathPlanner:
 
                     if visualize != 0:
                         for i in range(potential_pose_traj.shape[0]):
-                            self.window.add_point(potential_pose_traj[i, 0:2], radius=2, color=(0, 0, 255), update=False)
+                            self.window.add_point(potential_pose_traj[i, 0:2], radius=1, color=(0, 0, 255), update=False)
                         if frequent_viz_update:
                             self.window.update()            
 
@@ -718,7 +711,7 @@ class PathPlanner:
                     if visualize:
                         # Remove previously found path
                         for i in range(self.best_goal_pose_traj.shape[0]):
-                            self.window.remove_point(self.best_goal_pose_traj[i, 0:2], radius=5, update=False)
+                            self.window.remove_point(self.best_goal_pose_traj[i, 0:2], radius=3, update=False)
                         if frequent_viz_update:
                             self.window.update()
                     self.best_goal_pose_path, self.best_goal_pose_traj = self.recover_path(
@@ -729,11 +722,10 @@ class PathPlanner:
                         # np.save("rrt_star_path.npy", np.array(self.best_goal_pose_path))
                         np.save("rrt_star_path.npy", self.best_goal_pose_traj[::5, :])
 
-            # print(iteration)
             # re-plot the found path for visualization purposes
             if visualize and self.best_goal_node_id != -1 and iteration % 10 == 0:
                 for i in range(self.best_goal_pose_traj.shape[0]):
-                    self.window.add_point(self.best_goal_pose_traj[i, 0:2], radius=5, color=(0, 255, 0), update=False)
+                    self.window.add_point(self.best_goal_pose_traj[i, 0:2], radius=3, color=(0, 255, 0), update=False)
                 self.window.add_goal_point(update=False)
 
             self.window.update()
@@ -780,7 +772,7 @@ class PathPlanner:
         
         if visualize:
             for i in range(trajectory.shape[0]):
-                self.window.add_point(trajectory[i, 0:2], radius=5, color=(0, 255, 0), update=False)
+                self.window.add_point(trajectory[i, 0:2], radius=3, color=(0, 255, 0), update=False)
             self.window.add_goal_point(update=False)
             self.window.update()
         return path, trajectory
@@ -793,7 +785,7 @@ def main():
 
     #robot information
     goal_point = np.array([42.0, -44.0]) #m
-    goal_point = np.array([10.0, 10.0]) #m
+    # goal_point = np.array([10.0, 10.0]) #m
 
     stopping_dist = 0.5 #m
 
