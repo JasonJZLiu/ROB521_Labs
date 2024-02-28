@@ -12,7 +12,6 @@ from scipy.spatial import cKDTree
 from scipy.linalg import inv
 
 
-
 def load_map(filename):
     im = mpimg.imread("../maps/" + filename)
     if len(im.shape) > 2:
