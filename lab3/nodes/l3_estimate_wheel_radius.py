@@ -46,6 +46,7 @@ class wheelRadiusEstimator():
         else:
             delPhi = b - a  
         return delPhi
+        
 
     def sensorCallback(self, msg):
         #Retrieve the encoder data form the sensor state msg
