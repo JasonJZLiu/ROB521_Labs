@@ -10,8 +10,10 @@ from geometry_msgs.msg import Twist
 INT32_MAX = 2**31
 NUM_ROTATIONS = 3 
 TICKS_PER_ROTATION = 4096
-WHEEL_RADIUS = 0.066 / 2 #In meters
+WHEEL_RADIUS = 0.03337592908582855
 
+
+# 0.14764801571786276
 
 class wheelBaselineEstimator():
     def __init__(self):
@@ -79,7 +81,7 @@ class wheelBaselineEstimator():
             # convert encoder ticks to rad
             sum_del_phi_r = 2*np.pi * (self.del_right_encoder / TICKS_PER_ROTATION)
             sum_del_phi_l = 2*np.pi * (self.del_left_encoder / TICKS_PER_ROTATION)
-            separation = (WHEEL_RADIUS / 2.0) * (sum_del_phi_r + sum_del_phi_l) / (NUM_ROTATIONS* 2*np.pi)
+            separation = (WHEEL_RADIUS / 2.0) * (sum_del_phi_r - sum_del_phi_l) / (NUM_ROTATIONS* 2*np.pi)
 
             print('Calibrated Separation: {} m'.format(separation))
 

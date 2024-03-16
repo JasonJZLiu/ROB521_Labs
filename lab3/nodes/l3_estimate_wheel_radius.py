@@ -8,8 +8,11 @@ from std_msgs.msg import Empty
 from geometry_msgs.msg import Twist
 
 INT32_MAX = 2**31
-DRIVEN_DISTANCE = 0.75 #in meters
+DRIVEN_DISTANCE = 1.0 #in meters
 TICKS_PER_ROTATION = 4096
+
+# 0.03337592908582855
+# 0.03625082838816678
 
 class wheelRadiusEstimator():
     def __init__(self):
@@ -80,6 +83,8 @@ class wheelRadiusEstimator():
             # convert encoder ticks to rad
             sum_del_phi_r = 2*np.pi * (self.del_right_encoder / TICKS_PER_ROTATION)
             sum_del_phi_l = 2*np.pi * (self.del_left_encoder / TICKS_PER_ROTATION)
+
+            # print(self.del_right_encoder, self.del_left_encoder)
             radius = 2 * DRIVEN_DISTANCE / (sum_del_phi_r + sum_del_phi_l)
             
             print('Calibrated Radius: {} m'.format(radius))
